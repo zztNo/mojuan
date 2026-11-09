@@ -1,0 +1,23 @@
+# 构建产物（由 tools/build_standalone.py 重新生成，无需入库）
+mojuan-offline.html
+
+# 工具缓存：抓取/拆分书源的中间产物，体积大且可重建
+tools/cache/
+
+# 本地项目元数据（WorkBuddy 内部）
+.workbuddy/
+
+# 测试运行产生的临时产物
+.playwright-cli/
+
+# 依赖
+node_modules/
+
+# 日志
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini

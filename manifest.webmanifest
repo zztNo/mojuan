@@ -1,0 +1,27 @@
+{
+  "id": "./",
+  "name": "墨卷 · 一卷在手，人间可读",
+  "short_name": "墨卷",
+  "description": "中式水墨风阅读应用：书架、书城、榜单与沉浸式阅读器。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./index.html#/shelf",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f5f1e8",
+  "theme_color": "#f5f1e8",
+  "categories": ["books", "entertainment", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "我的书架", "short_name": "书架", "url": "./index.html#/shelf", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "逛书城", "short_name": "书城", "url": "./index.html#/store", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "继续阅读", "short_name": "继续读", "url": "./index.html#/shelf", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
