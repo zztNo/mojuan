@@ -1114,6 +1114,15 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .lp-item.active { color: var(--cinnabar); background: var(--cinnabar-soft); }
 .lp-item small { display: block; font-size: 10px; color: var(--ink-3); }
 .lp-empty { padding: 0 0 10px; font-size: 12px; line-height: 1.7; color: var(--ink-3); }
+/* 音色一行 = 选择按钮 + 试听键（音色名看不出嗓音，先听一耳朵再选） */
+.lp-row { display: flex; align-items: stretch; gap: 6px; }
+.lp-row .lp-item { flex: 1; min-width: 0; }
+.lp-try { flex: none; width: 38px; display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--paper-2); color: var(--ink-3); }
+.lp-try:hover { border-color: var(--cinnabar); color: var(--cinnabar); }
+.lp-try .ic { width: 15px; height: 15px; }
+.lp-group { margin: 12px 0 5px; font-size: 11px; letter-spacing: .04em; color: var(--ink-3); }
+.lp-group:first-of-type { margin-top: 4px; }
 /* 在线音色入口与配置弹层 */
 .lp-online { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
   padding: 9px 11px; margin: 0 0 10px; border-radius: 9px; border: 1px dashed var(--line);

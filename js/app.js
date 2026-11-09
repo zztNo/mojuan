@@ -1724,6 +1724,27 @@
     const list = zh.length ? zh : all;
     return list.slice().sort((a, b) => voiceTier(a) - voiceTier(b));
   }
+  /* 面板要「设备里有什么就让人看见什么」：中文音色排前面，其它语言另起一组跟在后面。
+     以前只列中文，用户装的粤语/日语/英语音色在面板里根本看不到，像是没有。 */
+  function listenVoiceGroups() {
+    if (!speechOK()) return { zh: [], other: [] };
+    const all = speechSynthesis.getVoices() || [];
+    const zh = [], other = [];
+    all.forEach((v) => {
+      if (/^(zh|cmn)/i.test(v.lang || '') || /chinese|中文|普通话|國語|国语/i.test(v.name || '')) zh.push(v);
+      else other.push(v);
+    });
+    const byTier = (a, b) => voiceTier(a) - voiceTier(b) || String(a.name).localeCompare(String(b.name));
+    return { zh: zh.sort(byTier), other: other.sort(byTier) };
+  }
+  const TIER_LABEL = ['自然', '通用', '机械'];
+  /* Chrome 第一次取语音列表常常是空的，等系统把列表吐出来再刷一次面板，别让用户以为没音色 */
+  if (speechOK() && typeof speechSynthesis.addEventListener === 'function') {
+    speechSynthesis.addEventListener('voiceschanged', () => {
+      const p = $('#listenPanel');
+      if (p && !p.hidden && p.dataset.kind === 'voice') listenPanel('voice');
+    });
+  }
   function listenPickVoice() {
     const vs = listenVoices();
     if (!vs.length) return null;
@@ -2274,7 +2295,8 @@
     if (kind === 'rate') {
       p.innerHTML = head('朗读语速') + rateSliderHtml(listen.rate, '按住圆点拖动 · 0.5× ~ 3×');
     } else if (kind === 'voice') {
-      const vs = listenVoices();
+      const g = listenVoiceGroups();
+      const vs = g.zh.length ? g.zh : g.other;
       const allMeh = vs.length && vs.every((v) => voiceTier(v) === 2);
       const vv = VOICE();
       const onlineLabel = vv ? vv.activeLabel() : '';
@@ -2284,10 +2306,19 @@
         : (!vs.length
           ? '<div class="lp-empty">没有检测到可用语音，可在系统设置里安装中文语音包</div>'
           : (allMeh ? '<div class="lp-empty">这台设备只装了早期机械音，念白话尚可、念文言会比较生硬。上面可以启用在线音色，或者装一个自然语音包。</div>' : ''));
+      /* 每个音色右侧给一个试听键：音色名看不出实际嗓音，选之前先听一耳朵最实在 */
+      const row = (v) => `<div class="lp-row">
+          <button class="lp-item ${listen.voiceURI === v.voiceURI ? 'active' : ''}" data-action="listen-voice" data-val="${esc(v.voiceURI)}">${esc(v.name)}<small>${esc(v.lang)} · ${TIER_LABEL[voiceTier(v)]}</small></button>
+          <button class="lp-try" data-action="listen-voice-try" data-val="${esc(v.voiceURI)}" title="试听这个音色">${icon('volume', 'ic-sm')}</button>
+        </div>`;
+      const group = (title, list) => list.length
+        ? `<div class="lp-group">${title}</div><div class="lp-list">${list.map(row).join('')}</div>`
+        : '';
       /* 提示放列表上方：面板高度有限，放下面要滚动才看得见 */
-      p.innerHTML = head('音色') + onlineBtn + tip + (vs.length
-        ? `<div class="lp-list">${vs.map((v) => `<button class="lp-item ${listen.voiceURI === v.voiceURI ? 'active' : ''}" data-action="listen-voice" data-val="${esc(v.voiceURI)}">${esc(v.name)}<small>${esc(v.lang)}${voiceTier(v) === 0 ? ' · 自然' : (voiceTier(v) === 2 ? ' · 机械' : '')}</small></button>`).join('')}</div>`
-        : '');
+      p.innerHTML = head('音色 · ' + (g.zh.length + g.other.length) + ' 个') + onlineBtn + tip
+        + group('中文音色', g.zh)
+        + group(g.zh.length ? '其它语言' : '音色', g.other)
+        + (g.other.length && g.zh.length ? '<div class="lp-empty">文言文建议用中文音色；其它语言念中文会走音。</div>' : '');
     } else if (kind === 'timer') {
       p.innerHTML = head('定时停止') + `<div class="rs-pills">${[[0, '不开启'], [15, '15 分钟'], [30, '30 分钟'], [60, '60 分钟'], [90, '90 分钟']].map(([m, l]) =>
         `<button class="rs-pill ${listen.timerMin === m ? 'active' : ''}" data-action="listen-timer" data-val="${m}">${l}</button>`).join('')}</div>`;
@@ -2432,17 +2463,64 @@
   }
 
   /* 字号 / 行距 / 窗口尺寸变化时，按当前阅读位置重新分页 */
+  /* 当前页第一个字在整章里的字符偏移：重排的锚点 */
+  function flipCharOffset(pages, idx) {
+    let off = 0;
+    for (let i = 0; i < idx && i < pages.length; i += 1) {
+      for (const it of pages[i]) off += it.text.length;
+    }
+    return off;
+  }
+  function flipPageAtOffset(pages, off) {
+    let acc = 0;
+    for (let i = 0; i < pages.length; i += 1) {
+      let len = 0;
+      for (const it of pages[i]) len += it.text.length;
+      if (acc + len > off) return i;
+      acc += len;
+    }
+    return Math.max(0, pages.length - 1);
+  }
   function reflowFlip() {
     if (state.settings.pageMode !== 'flip' || !$('#reader') || !flipState.pages.length) return;
     const b = getBook(flipState.id); if (!b) return;
     const fp = $('#flipPage'); if (!fp) return;
     const W = fp.clientWidth, H = fp.clientHeight;
     if (W < 60 || H < 80) return;
-    const ratio = flipState.pages.length > 1 ? flipState.page / (flipState.pages.length - 1) : 0;
+    /* 用「当前页第一个字在全章的偏移」当锚点。字号一变页数全变，
+       按页码比例定位会漂到别处，按字数锚点能稳稳停在原来读到的那句话上。 */
+    const anchor = flipCharOffset(flipState.pages, flipState.page);
     const pages = paginate(flipItems(b, flipState.ch), W, H);
     flipState.pages = pages;
-    flipState.page = Math.min(pages.length - 1, Math.round(ratio * (pages.length - 1)));
+    flipState.page = flipPageAtOffset(pages, anchor);
     renderFlipPage('');
+  }
+  /* 连点字号 / 行距时，只在停手后重排一次：每次点击都整章重算会把界面拖住，
+     而中间那些状态用户根本来不及看 */
+  let reflowTimer = null;
+  function scheduleReflow() {
+    if (reflowTimer) clearTimeout(reflowTimer);
+    reflowTimer = setTimeout(() => { reflowTimer = null; reflowFlip(); }, 110);
+  }
+  /* 改完字号 / 行距后的统一收尾：翻页模式重排；滚动模式保住原来的阅读位置 */
+  function restyleReader() {
+    const body = $('#readerBody');
+    const isFlip = state.settings.pageMode === 'flip';
+    let ratio = 0;
+    if (!isFlip && body) {
+      const max = body.scrollHeight - body.clientHeight;
+      ratio = max > 0 ? body.scrollTop / max : 0;
+    }
+    applyReaderStyle();
+    if (isFlip) { scheduleReflow(); return; }
+    /* 滚动模式不会重新渲染节点，字号一变浏览器就地重排，scrollTop 数值不变但位置会挪，
+       所以按比例把它拉回原处（等下一帧，布局算完再设） */
+    if (body) {
+      requestAnimationFrame(() => {
+        const max = body.scrollHeight - body.clientHeight;
+        if (max > 0) body.scrollTop = Math.round(ratio * max);
+      });
+    }
   }
   let readTimer = null;
   function stopReadClock() { if (readTimer) { clearInterval(readTimer); readTimer = null; } }
@@ -2666,8 +2744,8 @@
       panel.innerHTML = `<div class="reader-settings">
         <div class="rs-row"><label>字体</label><div class="rs-pills">${Object.keys(FONT_NAMES).map((k) =>
           `<button class="rs-pill ${state.settings.font === k ? 'active' : ''}" data-action="set-fontfamily" data-val="${k}">${FONT_NAMES[k]}</button>`).join('')}</div></div>
-        <div class="rs-row"><label>字号</label><div class="rs-pills">${fsList.map((f) =>
-          `<button class="rs-pill ${state.settings.fs === f ? 'active' : ''}" data-action="set-font" data-val="${f}">${f}</button>`).join('')}</div></div>
+        <div class="rs-row"><label>字号 ${state.settings.fs}px</label><div class="rs-pills">${fsList.map((f) =>
+          `<button class="rs-pill ${state.settings.fs === f ? 'active' : ''}" data-action="set-font" data-val="${f}">${f}</button>`).join('')}<button class="rs-pill" data-action="set-font" data-val="-">A−</button><button class="rs-pill" data-action="set-font" data-val="+">A＋</button></div></div>
         <div class="rs-row"><label>行距</label><div class="rs-pills">${[1.7, 2, 2.3].map((l, i) =>
           `<button class="rs-pill ${state.settings.lh === l ? 'active' : ''}" data-action="set-lh" data-val="${l}">${['紧凑', '适中', '疏朗'][i]}</button>`).join('')}</div></div>
         <div class="rs-row"><label>纸张</label><div class="rs-pills">${paperList.map(([k, c]) =>
@@ -3143,7 +3221,7 @@
       }
       case 'set-fontfamily': {
         state.settings.font = FONT_STACKS[val] ? val : 'song'; save();
-        applyReaderStyle(); reflowFlip();
+        restyleReader();
         $$('[data-action=set-fontfamily]').forEach((p) => p.classList.toggle('active', p.dataset.val === state.settings.font));
         if (!$('#reader')) rerender();
         break;
@@ -3151,12 +3229,18 @@
       case 'set-font': {
         if (val === '+' || val === '-') state.settings.fs = Math.max(15, Math.min(28, state.settings.fs + (val === '+' ? 1 : -1)));
         else state.settings.fs = Number(val);
-        save(); applyReaderStyle(); reflowFlip();
+        save(); restyleReader();
         if (!$('#reader')) { rerender(); break; }
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-font') p.classList.toggle('active', Number(p.dataset.val) === state.settings.fs); });
         break;
       }
-      case 'set-lh': state.settings.lh = Number(val); save(); applyReaderStyle(); reflowFlip(); openPanel('settings'); break;
+      case 'set-lh': {
+        state.settings.lh = Number(val); save(); restyleReader();
+        if (!$('#reader')) { rerender(); break; }
+        /* 只改高亮，不重建面板——重建会把面板滚回顶部，调一次行距跳一次，很难用 */
+        $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-lh') p.classList.toggle('active', Number(p.dataset.val) === state.settings.lh); });
+        break;
+      }
       case 'set-paper':
         state.settings.paper = val; save(); applyReaderStyle();
         if (!$('#reader')) { rerender(); break; }
@@ -3234,6 +3318,19 @@
         state.settings.voiceURI = val; save();
         listenPanel('voice');
         if (listen.playing) listenSpeak(true);
+        break;
+      }
+      /* 试听：只念一句短的，不选中、不动朗读进度 */
+      case 'listen-voice-try': {
+        if (!speechOK()) { toast('这台设备不支持语音朗读'); break; }
+        if (listen.playing) { toast('听卷进行中，先暂停再试听'); break; }
+        const all = speechSynthesis.getVoices() || [];
+        const v = all.find((x) => x.voiceURI === val);
+        if (!v) { toast('这个音色已不在设备上'); break; }
+        try { speechSynthesis.cancel(); } catch (_) { /* 忽略 */ }
+        const u = new SpeechSynthesisUtterance('此间有墨一卷，静听即是山林。');
+        u.voice = v; u.lang = v.lang || 'zh-CN'; u.rate = listen.rate || 1;
+        speechSynthesis.speak(u);
         break;
       }
       case 'voice-config': openVoiceConfig(); break;
