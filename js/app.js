@@ -1707,7 +1707,7 @@
      SAPI 那批（Huihui/Kangkang/Yaoyao）是拼接式的，念白话还行、念文言很硬。 */
   function voiceTier(v) {
     const n = (v.name || '').toLowerCase();
-    if (/natural|neural|online|premium|enhanced/.test(n)) return 0;
+    if (/natural|neural|online|premium|enhanced|google|siri/.test(n)) return 0;
     if (/huihui|kangkang|yaoyao|sapi|espeak|compact|pico/.test(n)) return 2;
     return 1;
   }
@@ -1738,6 +1738,40 @@
     return { zh: zh.sort(byTier), other: other.sort(byTier) };
   }
   const TIER_LABEL = ['自然', '通用', '机械'];
+
+  /* 系统音色的名字动辄「Microsoft Huihui - Chinese (Simplified, PRC)」「Google 普通话（中国大陆）」，
+     一屏列下来全是型号和地区码，反而看不出最该知道的两件事：男声还是女声、音质什么档。
+     所以列表里只显示「女声 · 自然」这样的短标签，语言压成两字，序号用来区分同名音色；
+     完整原名保留在 title 里，想核对型号时悬停即可。 */
+  const VOICE_FEMALE = /(huihui|yaoyao|xiaoxiao|xiaoyi|xiaochen|xiaohan|xiaomeng|xiaomo|xiaoxuan|xiaorui|xiaoshuang|xiaoyan|xiaoyou|xiaozhen|xiaobei|xiaoni|hiujin|tingting|meijia|sinji|tianran|lili|female|女声|女)/i;
+  const VOICE_MALE = /(kangkang|yunxi|yunyang|yunjian|yunfeng|yunhao|yunjie|yunye|yunze|yunxia|\bmale\b|男声|男)/i;
+  function voiceGender(v) {
+    const n = String(v.name || '');
+    if (VOICE_FEMALE.test(n)) return '女';
+    if (VOICE_MALE.test(n)) return '男';
+    return '';
+  }
+  const LANG_SHORT = {
+    zh: '中文', yue: '粤语', cmn: '中文', ja: '日语', en: '英语', ko: '韩语',
+    fr: '法语', de: '德语', es: '西语', ru: '俄语', it: '意语', pt: '葡语',
+    th: '泰语', vi: '越语', ar: '阿语', nl: '荷语', pl: '波语', tr: '土语'
+  };
+  function voiceLangShort(v) {
+    const lang = String(v.lang || '').toLowerCase().replace(/_/g, '-');
+    const base = lang.split('-')[0];
+    if (base === 'zh') {
+      if (/-(hk|mo|yue)/.test(lang) || /cantonese|粤|粵/i.test(v.name || '')) return '粤语';
+      if (/-tw/.test(lang)) return '台湾';
+      return '中文';
+    }
+    return LANG_SHORT[base] || (base ? base.toUpperCase() : '未知');
+  }
+  /* 列表里那一行主文案：性别 + 音质档；性别推不出来就只说档位 */
+  function voiceLabel(v) {
+    const tier = TIER_LABEL[voiceTier(v)];
+    const g = voiceGender(v);
+    return g ? g + '声 · ' + tier : tier + '音色';
+  }
   /* Chrome 第一次取语音列表常常是空的，等系统把列表吐出来再刷一次面板，别让用户以为没音色 */
   if (speechOK() && typeof speechSynthesis.addEventListener === 'function') {
     speechSynthesis.addEventListener('voiceschanged', () => {
@@ -2306,9 +2340,9 @@
         : (!vs.length
           ? '<div class="lp-empty">没有检测到可用语音，可在系统设置里安装中文语音包</div>'
           : (allMeh ? '<div class="lp-empty">这台设备只装了早期机械音，念白话尚可、念文言会比较生硬。上面可以启用在线音色，或者装一个自然语音包。</div>' : ''));
-      /* 每个音色右侧给一个试听键：音色名看不出实际嗓音，选之前先听一耳朵最实在 */
-      const row = (v) => `<div class="lp-row">
-          <button class="lp-item ${listen.voiceURI === v.voiceURI ? 'active' : ''}" data-action="listen-voice" data-val="${esc(v.voiceURI)}">${esc(v.name)}<small>${esc(v.lang)} · ${TIER_LABEL[voiceTier(v)]}</small></button>
+      /* 每个音色右侧给一个试听键：标签只有「女声 · 自然」，实际嗓音还得听一耳朵才准 */
+      const row = (v, no) => `<div class="lp-row">
+          <button class="lp-item ${listen.voiceURI === v.voiceURI ? 'active' : ''}" data-action="listen-voice" data-val="${esc(v.voiceURI)}" title="${esc(v.name)}">${voiceLabel(v)}<small>${voiceLangShort(v)} · ${no + 1}</small></button>
           <button class="lp-try" data-action="listen-voice-try" data-val="${esc(v.voiceURI)}" title="试听这个音色">${icon('volume', 'ic-sm')}</button>
         </div>`;
       const group = (title, list) => list.length
