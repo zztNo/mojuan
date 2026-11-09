@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨卷 · 推送到 GitHub 可视化指南</title>
+<style>
+  :root{
+    --ink:#2b2b2b; --paper:#f5f0e6; --paper2:#ece4d4;
+    --cinnabar:#9e3d28; --seal:#b1402c; --line:#d8cdb6;
+    --ok:#3a7d44; --note:#c8841b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:linear-gradient(180deg,#f7f2e8,#efe7d6);color:var(--ink);line-height:1.7;padding:24px 14px 60px}
+  .wrap{max-width:880px;margin:0 auto}
+  header{text-align:center;margin-bottom:8px}
+  header .seal{display:inline-block;background:var(--seal);color:#fff;border-radius:8px;
+    padding:6px 14px;font-size:13px;letter-spacing:3px;transform:rotate(-2deg);box-shadow:0 2px 6px rgba(0,0,0,.15)}
+  header h1{font-size:26px;margin:14px 0 4px}
+  header p{margin:0;color:#6b6256;font-size:14px}
+  .status{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:18px 0 6px}
+  .status .chip{background:#fff;border:1px solid var(--line);border-radius:999px;
+    padding:6px 14px;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .status .chip b{color:var(--ok)}
+  .step{background:#fff;border:1px solid var(--line);border-radius:16px;
+    padding:20px 22px;margin:18px 0;box-shadow:0 4px 16px rgba(0,0,0,.05);position:relative;overflow:hidden}
+  .step .num{position:absolute;top:-2px;right:14px;font-size:64px;font-weight:800;color:#f0e8d8;z-index:0}
+  .step h2{margin:0 0 6px;font-size:19px;z-index:1;position:relative}
+  .step .lead{color:#6b6256;font-size:14px;margin:0 0 16px;z-index:1;position:relative}
+  /* 模拟窗口 */
+  .win{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fbf9f3;margin:12px 0}
+  .win .bar{background:#e9e1d2;padding:8px 12px;display:flex;align-items:center;gap:6px;font-size:12px;color:#7a7066}
+  .win .bar .dot{width:11px;height:11px;border-radius:50%}
+  .win .bar .r{background:#ec6a5e}.win .bar .y{background:#f4bf4f}.win .bar .g{background:#61c554}
+  .win .bar .url{flex:1;text-align:center;background:#fff;border-radius:6px;padding:3px 8px;color:#555;font-size:11px}
+  .win .body{padding:16px;font-size:14px}
+  /* 表单模拟 */
+  .field{margin:10px 0}
+  .field label{display:block;font-size:13px;color:#555;margin-bottom:4px}
+  .field .input{background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font-size:14px;color:var(--ink)}
+  .field .input.fake{background:#f4f1e9}
+  .check{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px}
+  .box{width:18px;height:18px;border:2px solid #b9ad97;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff}
+  .box.on{background:var(--ok);border-color:var(--ok)}
+  .box.bad{background:#cf4b3a;border-color:#cf4b3a}
+  .btn{display:inline-block;background:var(--ok);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:14px;cursor:default;box-shadow:0 2px 5px rgba(0,0,0,.12)}
+  .label-note{font-size:12px;color:var(--note);margin-top:6px}
+  .cross{position:absolute;color:#cf4b3a;font-weight:800;font-size:22px}
+  /* 命令卡片 */
+  .cmd{background:#1f1d1a;color:#f3ead6;border-radius:10px;padding:14px 16px;font-family:"SFMono-Regular",Consolas,monospace;
+    font-size:13.5px;line-height:1.9;position:relative;margin:10px 0}
+  .cmd .c{color:#7fd1a0}.cmd .cm{color:#8a8478}
+  .copy{position:absolute;top:10px;right:10px;background:#3a352f;color:#fff;border:none;border-radius:6px;
+    padding:5px 11px;font-size:12px;cursor:pointer}
+  .copy:active{background:var(--cinnabar)}
+  .tabs{display:flex;gap:8px;margin:6px 0 0}
+  .tabs button{flex:1;background:#efe7d6;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px;cursor:pointer;color:#6b6256}
+  .tabs button.active{background:var(--cinnabar);color:#fff;border-color:var(--cinnabar)}
+  .warn{background:#fdf3e3;border-left:4px solid var(--note);border-radius:0 8px 8px 0;padding:12px 14px;font-size:13.5px;margin:12px 0}
+  .warn b{color:var(--note)}
+  .tip{font-size:13px;color:#6b6256;background:#f1ece0;border-radius:8px;padding:10px 12px;margin:10px 0}
+  .okline{color:var(--ok);font-weight:600}
+  footer{text-align:center;color:#8a8074;font-size:13px;margin-top:24px}
+  .flow{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin:6px 0 0;font-size:13px;color:#6b6256}
+  .flow .node{background:#fff;border:1px solid var(--line);border-radius:8px;padding:5px 10px}
+  .flow .arrow{color:var(--cinnabar)}
+  kbd{background:#f0e9da;border:1px solid #cdbfa3;border-radius:4px;padding:1px 6px;font-size:12px;font-family:inherit}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="seal">墨卷 · 部署</span>
+    <h1>把墨卷推送到 GitHub</h1>
+    <p>全程只动代码，不会改动你的用户名、头像或任何个人资料</p>
+  </header>
+
+  <div class="status">
+    <span class="chip">本地仓库 <b>已就绪 ✓</b></span>
+    <span class="chip">分支 <b>main</b></span>
+    <span class="chip">待上传 <b>54 个文件</b> · 约 2.3MB</span>
+    <span class="chip">远程 <b>未添加</b></span>
+  </div>
+
+  <div class="flow">
+    <span class="node">① 网页建仓库</span><span class="arrow">→</span>
+    <span class="node">② 生成令牌</span><span class="arrow">→</span>
+    <span class="node">③ 本机推送</span>
+  </div>
+
+  <!-- 准备 -->
+  <div class="step">
+    <div class="num">0</div>
+    <h2>开始前：确认你电脑装了 Git</h2>
+    <p class="lead">推送要用到 Git 命令行。如果下面第 ③ 步打不开「Git Bash」，先装一下。</p>
+    <div class="tip">
+      👉 去 <b>git-scm.com</b> 下载 Windows 版，一路默认下一步装好即可。<br>
+      装完之后，在任意文件夹右键，应该能看到「<b>Git Bash Here</b> / Open Git Bash」；或者开始菜单搜「Git Bash」也能找到。
+    </div>
+    <div class="warn">如果你已经能打开 Git Bash / PowerShell，<b>跳过这步</b>，直接从 ① 开始。</div>
+  </div>
+
+  <!-- 步骤 1：建仓库 -->
+  <div class="step">
+    <div class="num">1</div>
+    <h2>在 GitHub 网页上建一个空仓库</h2>
+    <p class="lead">打开浏览器，登录你的 GitHub 账号（就是 zztNo），新建一个公开仓库。</p>
+    <div class="win">
+      <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="url">github.com/new</span></div>
+      <div class="body">
+        <div class="field">
+          <label>Repository name（仓库名）</label>
+          <div class="input fake">mojuan</div>
+        </div>
+        <div class="field">
+          <label>Description（描述，可留空）</label>
+          <div class="input fake">墨卷 · 一卷在手，人间可读</div>
+        </div>
+        <div class="check"><span class="box on">●</span> Public（公开）</div>
+        <div class="check"><span class="box bad">✕</span> ⚠️ 不要勾「Add a README file」</div>
+        <div class="check"><span class="box bad">✕</span> ⚠️ 不要勾「Add .gitignore」</div>
+        <div class="check"><span class="box bad">✕</span> ⚠️ 不要勾「Choose a license」</div>
+        <div class="label-note">本地代码里已经有 README、LICENSE、.gitignore 了，再勾会跟本地冲突。</div>
+        <div style="margin-top:14px"><span class="btn">Create repository</span></div>
+      </div>
+    </div>
+    <div class="warn"><b>关键：</b>创建后页面会跳到一个"快速上手"页。先别管它，直接去第 ② 步，因为你的代码已经在本地等好了。</div>
+  </div>
+
+  <!-- 步骤 2：PAT -->
+  <div class="step">
+    <div class="num">2</div>
+    <h2>生成一个「访问令牌」（用来登录推送）</h2>
+    <p class="lead">GitHub 现在不让用登录密码推代码了，要用 Personal Access Token（令牌）代替密码。</p>
+    <div class="win">
+      <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="url">github.com → 右上角头像 → Settings → Developer settings → Personal access tokens → Tokens (classic)</span></div>
+      <div class="body">
+        <div class="field"><label>Note（备注，起个名）</label><div class="input fake">mojuan-push</div></div>
+        <div class="field"><label>Expiration（有效期）</label><div class="input fake">90 days（或选 No expiration）</div></div>
+        <div class="check"><span class="box on">●</span> ✅ 勾选 <b>repo</b>（最上面那一组，控制仓库读写）</div>
+        <div style="margin-top:14px"><span class="btn">Generate token</span></div>
+        <div class="label-note">生成后会出现一长串 <b>ghp_ 开头</b> 的字符 —— 立刻复制保存！</div>
+      </div>
+    </div>
+    <div class="warn"><b>务必保存：</b>那个令牌<b>只显示这一次</b>。把它先粘到记事本里备用。之后推送"密码"就填它。</div>
+  </div>
+
+  <!-- 步骤 3：推送 -->
+  <div class="step">
+    <div class="num">3</div>
+    <h2>在电脑上打开终端，粘贴 3 行命令</h2>
+    <p class="lead">右键墨卷文件夹 →「Git Bash Here」（或在项目目录里打开 Git Bash），把下面的命令整段粘进去，回车。</p>
+
+    <div class="tabs">
+      <button id="tBash" class="active" onclick="switchTab('Bash')">Git Bash</button>
+      <button id="tPwsh" onclick="switchTab('Pwsh')">PowerShell</button>
+    </div>
+
+    <div id="pBash">
+      <div class="cmd">
+        <button class="copy" onclick="copyCmd('bash')">复制</button>
+        <span class="cm"># 进入项目目录</span>
+        cd "/d/15810/文档/WorkBuddy/NO.2/mojuan"
+
+        <span class="cm"># 关联远程仓库（若已存在先移除再添加，重复跑也不报错）</span>
+        git remote remove origin <span class="cm">2>/dev/null</span>
+        git remote add origin https://github.com/zztNo/mojuan.git
+
+        <span class="cm"># 推送</span>
+        git push -u origin main
+      </div>
+    </div>
+
+    <div id="pPwsh" style="display:none">
+      <div class="cmd">
+        <button class="copy" onclick="copyCmd('pwsh')">复制</button>
+        <span class="cm"># 进入项目目录</span>
+        cd "D:\15810\文档\WorkBuddy\NO.2\mojuan"
+
+        <span class="cm"># 关联远程仓库（若已存在先移除再添加）</span>
+        git remote remove origin <span class="cm">2>$null</span>
+        git remote add origin https://github.com/zztNo/mojuan.git
+
+        <span class="cm"># 推送</span>
+        git push -u origin main
+      </div>
+    </div>
+
+    <div class="warn"><b>最后一步会让你登录：</b><br>
+      用户名填 <b>zztNo</b><br>
+      密码栏填<b>刚才生成的那个 ghp_ 令牌</b>（不是 GitHub 登录密码）<br>
+      <span style="font-size:12px">（密码框里打字可能不显示，属正常，粘贴后回车即可）</span>
+    </div>
+
+    <div class="tip" id="done">推送成功后，终端会显示 <span class="okline">main -> main</span> 之类字样。打开 <b>https://github.com/zztNo/mojuan</b> 就能看到全部代码了 🎉</div>
+  </div>
+
+  <div class="step">
+    <div class="num">?</div>
+    <h2>常见问题</h2>
+    <p class="lead">卡住了看这里。</p>
+    <div class="warn"><b>Q：提示 <kbd>remote origin already exists</kbd>？</b><br>
+      说明之前加过远程。直接用上面的命令（已含 <span class="cmd-i">git remote remove origin</span> 自动处理），或手动执行：<br>
+      <span class="input fake" style="display:inline-block;font-size:13px">git remote set-url origin https://github.com/zztNo/mojuan.git</span> 再 push。</div>
+    <div class="warn"><b>Q：提示 <kbd>Authentication failed</kbd> / 403？</b><br>
+      密码那栏填的是<b>令牌</b>，不是登录密码；且令牌必须勾了 <b>repo</b> 权限。重新生成一个试试。</div>
+    <div class="warn"><b>Q：提示 <kbd>could not resolve host github.com</kbd>？</b><br>
+      检查网络 / 是否开了代理。换个网络再 push。</div>
+    <div class="warn"><b>Q：想改提交显示的名字和邮箱？</b><br>
+      推送前先执行：<span class="input fake" style="display:inline-block;font-size:12px">git config --global user.name "你的名字"</span> 和 <span class="input fake" style="display:inline-block;font-size:12px">git config --global user.email "你的邮箱"</span>。已存在的两条提交作者不会自动变，不纠结也行。</div>
+  </div>
+
+  <footer>
+    推完之后告诉我就行，我可以继续帮你补仓库的 Issue 模板 / 话题标签。<br>
+    这份指南也保存在项目目录：<b>GITHUB_PUSH_GUIDE.html</b>
+  </footer>
+</div>
+
+<script>
+  function switchTab(t){
+    document.getElementById('tBash').classList.toggle('active', t==='Bash');
+    document.getElementById('tPwsh').classList.toggle('active', t==='Pwsh');
+    document.getElementById('pBash').style.display = t==='Bash'?'block':'none';
+    document.getElementById('pPwsh').style.display = t==='Pwsh'?'block':'none';
+  }
+  function copyCmd(which){
+    var txt;
+    if(which==='bash'){
+      txt = 'cd "/d/15810/文档/WorkBuddy/NO.2/mojuan"\n'+
+            'git remote remove origin 2>/dev/null\n'+
+            'git remote add origin https://github.com/zztNo/mojuan.git\n'+
+            'git push -u origin main';
+    } else {
+      txt = 'cd "D:\\15810\\文档\\WorkBuddy\\NO.2\\mojuan"\n'+
+            'git remote remove origin 2>$null\n'+
+            'git remote add origin https://github.com/zztNo/mojuan.git\n'+
+            'git push -u origin main';
+    }
+    navigator.clipboard.writeText(txt).then(function(){
+      event.target.textContent = '已复制 ✓';
+      setTimeout(function(){ event.target.textContent='复制'; }, 1500);
+    }).catch(function(){
+      alert('复制失败，请手动选中命令复制');
+    });
+  }
+</script>
+</body>
+</html>
