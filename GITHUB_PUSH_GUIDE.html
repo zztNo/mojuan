@@ -156,12 +156,13 @@
   <!-- 步骤 3：推送 -->
   <div class="step">
     <div class="num">3</div>
-    <h2>在电脑上打开终端，粘贴 3 行命令</h2>
-    <p class="lead">用 <b>PowerShell</b>（你这台机器推荐这个）。在 mojuan 文件夹里按上面第 ⓿ 步的方法打开终端，然后<b>一条一条</b>粘贴、每条回车。</p>
-    <div class="warn"><b>别一次粘三行：</b>一次粘多行时，终端有时只执行第一行，后面像"没反应"。</div>
+    <h2>在终端里补一行 PATH，然后 push</h2>
+    <p class="lead">用<b>普通终端</b>（你这台机器推荐这个，不必是 Git Bash）。在 mojuan 文件夹里按上面第 ⓿ 步的方法打开，然后<b>一条一条</b>粘贴、每条回车。</p>
+    <div class="warn"><b>如果你看到「无法将“git”项识别为 cmdlet…」：</b>说明 git 没在 PATH 里。先跑下面这条把它加进来（只对当前窗口有效，关掉就失效）。</div>
+    <div class="warn"><b>别一次粘多行：</b>换行会丢，两行会被当成一行执行（如 `git remote remove origin 2&gt;$null git remote add ...`），必然报错。一次一条。</div>
 
     <div class="tabs">
-      <button id="tPwsh" class="active" onclick="switchTab('Pwsh')">PowerShell（推荐）</button>
+      <button id="tPwsh" class="active" onclick="switchTab('Pwsh')">普通终端（推荐）</button>
       <button id="tBash" onclick="switchTab('Bash')">Git Bash（如果你装了）</button>
     </div>
 
@@ -171,13 +172,13 @@
         <span class="cm"># ① 进入项目目录（若已用地址栏方式打开终端，可跳过）</span>
         cd "D:\15810\文档\WorkBuddy\NO.2\mojuan"
 
-        <span class="cm"># ② 关联远程仓库（成功时没有任何输出，是正常的）</span>
-        git remote remove origin <span class="cm">2>$null</span>
-        git remote add origin https://github.com/zztNo/mojuan.git
-        <span class="cm"># ②b 确认一下，应显示两行 origin 地址</span>
+        <span class="cm"># ② 把自带 git 加进 PATH（出现「无法识别 git」时才需要跑这条）</span>
+        $env:Path = "D:\WorkBuddy\resources\vendor\PortableGit\mingw64\bin;" + $env:Path
+
+        <span class="cm"># ③ 验证 origin 已配好（应显示两行 origin 地址；已帮你配好，一般直接就有）</span>
         git remote -v
 
-        <span class="cm"># ③ 推送（这条才开始有输出）</span>
+        <span class="cm"># ④ 推送（这条才开始有输出/弹登录窗口）</span>
         git push -u origin main
       </div>
     </div>
@@ -248,8 +249,7 @@
             'git push -u origin main';
     } else {
       txt = 'cd "D:\\15810\\文档\\WorkBuddy\\NO.2\\mojuan"\n'+
-            'git remote remove origin 2>$null\n'+
-            'git remote add origin https://github.com/zztNo/mojuan.git\n'+
+            '$env:Path = "D:\\WorkBuddy\\resources\\vendor\\PortableGit\\mingw64\\bin;" + $env:Path\n'+
             'git remote -v\n'+
             'git push -u origin main';
     }
