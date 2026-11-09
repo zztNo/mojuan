@@ -24,8 +24,11 @@ eq('&nbsp; 转空格并折叠', c.cleanHtml('<p>甲&nbsp;&nbsp;乙</p>'), '甲 �
 eq('空输入返回空', c.cleanHtml(''), '');
 
 console.log('trimFoot');
-eq('截断到分类标记', c.trimFoot('正文很长分类：某某'), '正文很长');
+/* 页脚标记只在正文末尾才截断；短文本里出现的「分类：」属于正文，不能拦腰砍 */
+eq('末尾页脚被截断', c.trimFoot('正文很长'.repeat(20) + '分类：某某'), '正文很长'.repeat(20));
+eq('顶部导航框不误杀', c.trimFoot('姊妹计划：百科 数据项 ' + '正文很长'.repeat(30)), '姊妹计划：百科 数据项 ' + '正文很长'.repeat(30));
 eq('无标记原样返回', c.trimFoot('正文没有标记'), '正文没有标记');
+eq('空输入兜底', c.trimFoot(''), '');
 
 console.log('stripNav');
 eq('剥开头「目录」', c.stripNav('目录：第一回正文'), '第一回正文');

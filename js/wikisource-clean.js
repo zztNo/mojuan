@@ -14,7 +14,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const foots = ['姊妹计划', '数据项', '检索自', '分类：', '分类:', '本作品', '版权所有'];
+  const foots = ['检索自', '分类：', '分类:', '本作品', '版权所有', '数据项', '姊妹计划'];
 
   function cleanHtml(html) {
     if (!html) return '';
@@ -23,17 +23,38 @@
       .replace(/<script[\s\S]*?<\/script>/g, '')
       /* 章节页顶部那张表是「目录 / 书名 / 下一回▶」的导航条，剥标签后会粘成正文第一句 */
       .replace(/<table[^>]*class="[^"]*ws-header[^"]*"[\s\S]*?<\/table>/g, ' ')
+      /* 顶部信息框（书名/作者/朝代）在 <div id="headerContainer"> 里，
+         该 div 内部只有 table/ul/dl 无嵌套 div，故匹配到首个 </div> 即为其结束，不会误吞正文 */
+      .replace(/<div[^>]*id="headerContainer"[\s\S]*?<\/div>/g, ' ')
+      /* 正文之前那堆「通知 / 姊妹计划 / 校对提示 / 注本导航」框，都带这些 class：
+         sistersitebox(姊妹计划) · messagebox/ambox/mbox(校对与通知) · noprint/dynlayout-exempt(不打印的辅助框) · navbox(导航框)。
+         它们在 headerContainer 之外还有一份，若不剥掉，剥完标签会粘成正文第一句
+         （「维基百科 条目：难经…」「本作品由于校订不足而错误百出…」就是这么来的） */
+      .replace(/<table[^>]*class="[^"]*(?:sistersitebox|ambox|mbox|messagebox|dynlayout-exempt|noprint|navbox|metadata)[^"]*"[\s\S]*?<\/table>/g, ' ')
+      .replace(/<ul[^>]*id="plainSister"[\s\S]*?<\/ul>/g, ' ')
+      .replace(/<div[^>]*class="[^"]*mw-message-box[^"]*"[\s\S]*?<\/div>/g, ' ')
       .replace(/<sup[^>]*class="[^"]*reference[^"]*"[\s\S]*?<\/sup>/g, ' ')
+      /* 先还原 &nbsp;，否则「[ 编辑 ]」里的不换行空格会让下面的正则匹配不上 */
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
       .replace(/\[\d+\]/g, ' ')
-      .replace(/&nbsp;/g, ' ')
+      .replace(/\[\s*编辑\s*\]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
 
+  /* 页脚标记（检索自 / 分类 / 版权所有等）只可能出现在正文【末尾】。
+     现代维基文库把"姊妹计划 / 数据项"导航框放到了【顶部】，若按"首次出现即截断"
+     会把整页正文从顶部一刀切断（难经、伤寒论等古籍因此只剩头部几个字）。
+     这里只在文本后 40% 区域里用 lastIndexOf 找页脚，顶部导航框一律视为误报不截断。 */
   function trimFoot(txt) {
+    if (!txt) return '';
+    const threshold = Math.floor(txt.length * 0.6);
     let t = txt;
-    for (const f of foots) { const i = t.indexOf(f); if (i > 0) t = t.slice(0, i); }
+    for (const f of foots) {
+      const i = t.lastIndexOf(f);
+      if (i >= threshold) t = t.slice(0, i);
+    }
     return t.trim();
   }
 

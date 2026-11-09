@@ -130,20 +130,27 @@
     let chapters = [];
     let txt = '';
     try { txt = await fetchPage(page); } catch (e) { /* 网络问题，走子页分支 */ }
-    const markerRe = /第[一二三四五六七八九十百千0-9]+[章回卷篇]/g;
-    const markers = txt.match(markerRe) || [];
-    if (markers.length >= 3 && markers.length <= 400) {
-      const parts = txt.split(markerRe);
+    /* 单页大书（古籍常是「第一难 / 卷第一 / 辨太阳病脉证并治」这类非「第X回」命名的章节）。
+       准备几套候选分节标记，按特异性从高到低逐套试，选「命中 3~400 处、且平均每节≥100字」的那套——
+       既能分章，又不会把满屏「第X回」的目录页误当成正文（目录页每节只有回目本身，平均很短）。 */
+    const candidateRes = [
+      /辨\S{1,8}病脉证并治/g,                                   /* 伤寒论 / 金匮：特异性最高 */
+      /第[一二三四五六七八九十百千0-9]+难/g,                     /* 难经 */
+      /第[一二三四五六七八九十百千0-9]+[章回卷篇]/g,             /* 一般古籍 / 小说 */
+      /卷[一二三四五六七八九十百零]+/g                           /* 脉经 / 神农本草经等（易与正文引用混淆，兜底） */
+    ];
+    for (const markerRe of candidateRes) {
+      const markers = txt.match(markerRe) || [];
+      if (markers.length < 3 || markers.length > 400) continue;
+      const parts = txt.split(new RegExp(markerRe.source, 'g'));
       const inline = markers.map((mk, i) => {
         const seg = (parts[i + 1] || '').trim();
         return { no: i + 1, title: prettyTitle(mk), inline: seg ? splitParas(seg) : null };
       }).filter((c) => c.inline && c.inline.length);
-      /* 目录页同样是满屏「第X回」，但每段只有回目本身。
-         平均不到 200 字就当它是目录页，正文另去子页取。 */
       const total = inline.reduce((n, c) => n + c.inline.join('').length, 0);
-      if (inline.length && total / inline.length >= 200) {
+      if (inline.length && total / inline.length >= 100) {
         chapters = inline;
-        chapters.forEach((c, i) => { c.no = i + 1; });
+        break;
       }
     }
     if (!chapters.length) {
