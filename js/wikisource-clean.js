@@ -48,7 +48,9 @@
       /* 先还原 &nbsp;，否则「[ 编辑 ]」里的不换行空格会让下面的正则匹配不上 */
       .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
       .replace(/<[^>]+>/g, ' ')
-      .replace(/\[\d+\]/g, ' ')
+      /* 尾注编号 [1][2] 要留着（校勘记靠它分段），但正文里紧跟汉字的引注编号得去掉：
+         中文正文的编号一定紧贴前一个字（「天地[1]」），校勘记的编号一定在段首（前面是空格或开头）。 */
+      .replace(/(\S)\[\d{1,3}\]/g, '$1 ')
       .replace(/\[\s*编辑\s*\]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -113,5 +115,66 @@
     return String(name).replace(/第\s*(\d{1,4})\s*([回章卷篇節节])/g, (m, d, u) => '第' + numToCn(Number(d)) + u);
   }
 
-  return { cleanHtml, trimFoot, stripNav, splitParas, numToCn, prettyTitle };
+  /* ---------- 校勘记（编者注）与正文分离 ----------
+   * 维基文库的古籍页常在正文之后附一份校勘记：
+   *   [1]浮：原作沉，据《古本难经阐注》、《难经疏证》等改。
+   *   [2]儒：原作"涩"，据《古本难经阐注》等改。
+   * 这是编者比勘版本写下的注，不是原文；混在正文末尾，读者会以为书就这么写的。
+   * 这里把它整段抽出来交给阅读器单独折叠显示，正文只留书的本文。
+   *
+   * 判定方式：找一段【连续递增编号】的尾注（每条至少 4 字），且起点落在全文后 50%；
+   * 没有编号的，退一步认「原作 / 原无 / 据《…》改 / 当作 / 讹作」这类校勘句，
+   * 同样要求末尾连续出现 2 条以上才处理，避免把正文里的普通句子误当注文。 */
+  /* 一条校勘句：允许「浮：」这种被校字打头，句末到句号为止。
+     前面要求空白边界（清洗后段落之间就是空格），否则正文里的「原作」二字也会被认成注。 */
+  const NOTE_CLAUSE_RE = /(?:^|\s)(?:[^\s。！？]{1,10}[：:])?(?:原作|原无|原脱|原缺|据《[^》]{1,24}》|当作|疑作|讹作|避讳|一本作|他本)[^。！？]{0,80}[。！？]/g;
+  function splitNotes(txt) {
+    const src = String(txt || '');
+    if (!src) return { body: '', notes: [] };
+    const half = Math.floor(src.length * 0.5);
+    const marks = [];
+    const re = /\[(\d{1,3})\]/g;
+    let m;
+    while ((m = re.exec(src)) !== null) marks.push({ i: m.index, end: m.index + m[0].length, n: Number(m[1]) });
+    /* 找最长的一段「编号连续递增」的尾注区块 */
+    let best = null;
+    for (let s = 0; s < marks.length; s += 1) {
+      let e = s;
+      while (e + 1 < marks.length
+        && marks[e + 1].n === marks[e].n + 1
+        && marks[e + 1].i - marks[e].end >= 4) e += 1;
+      const len = e - s + 1;
+      if (len >= 2 && (!best || len > best.len)) best = { s, e, len };
+      if (e > s) s = e;
+    }
+    if (best && marks[best.s].i >= half) {
+      const cut = marks[best.s].i;
+      const notes = [];
+      for (let k = best.s; k <= best.e; k += 1) {
+        const stop = k < best.e ? marks[k + 1].i : src.length;
+        const text = src.slice(marks[k].end, stop).trim();
+        if (text) notes.push('〔' + marks[k].n + '〕' + text);
+      }
+      return { body: src.slice(0, cut).trim(), notes };
+    }
+    /* 没编号的校勘句：从末尾往前一条条接，接到断为止 */
+    const clauses = [];
+    NOTE_CLAUSE_RE.lastIndex = 0;
+    let c;
+    while ((c = NOTE_CLAUSE_RE.exec(src)) !== null) clauses.push({ i: c.index, end: c.index + c[0].length });
+    let from = clauses.length;
+    let tailEnd = src.trimEnd().length;
+    while (from > 0 && src.slice(clauses[from - 1].end, tailEnd).trim() === '') {
+      tailEnd = clauses[from - 1].i;
+      from -= 1;
+    }
+    if (clauses.length - from >= 2 && clauses[from].i >= half) {
+      const cut = clauses[from].i;
+      const notes = clauses.slice(from).map((x) => src.slice(x.i, x.end).trim()).filter(Boolean);
+      return { body: src.slice(0, cut).trim(), notes };
+    }
+    return { body: src, notes: [] };
+  }
+
+  return { cleanHtml, trimFoot, splitNotes, stripNav, splitParas, numToCn, prettyTitle };
 }));

@@ -50,6 +50,14 @@
     const inner = Math.max(0, Math.min(1, Number(pr.pct) || 0));
     return Math.max(0, Math.min(1, (ch - 1 + inner) / total));
   }
+  /* 本章的校勘记 / 编者注：由在线书源在取正文时顺手挂在章节对象上。
+     内置的离线书没有这类注，返回空数组。 */
+  function chapterNotes(b, idx) {
+    if (!b) return [];
+    const src = SRC.get(b.sourceId);
+    if (!src || typeof src.getChapterNotes !== 'function') return [];
+    try { return src.getChapterNotes(b.id, idx + 1) || []; } catch (e) { return []; }
+  }
   function paragraphs(b, idx) {
     if (b.local) {
       const rec = contentCache[b.id];
@@ -1301,6 +1309,7 @@
     const chapters = chapterList(b);
     const cur = chapters[ch - 1];
     const paras = paragraphs(b, ch - 1);
+    const notes = chapterNotes(b, ch - 1);
     const pr = state.progress[b.id] || { ch: 1, pct: 0 };
     const pct = pr.ch === ch ? pr.pct : 0;
     const errMsg = chapterErrMsg(b, ch);
@@ -1321,6 +1330,7 @@
           <div class="reader-chapter-no">${esc(b.title)} · ${esc(b.author)}</div>
           <h1>${esc(cur.title)}</h1>
           ${errMsg ? errBlock : paras.map((p) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}">${esc(p)}</p>`).join('')}
+          ${notes.length && !errMsg ? `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} 注释 · ${notes.length} 条</button>` : ''}
           <div class="reader-chapter-nav">
             <button data-action="reader-prev" ${ch <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
             <button data-action="reader-catalog">目录</button>
@@ -1379,6 +1389,10 @@
       { text: chapterList(b)[ch - 1].title, type: 'h1' }
     ];
     paragraphs(b, ch - 1).forEach((t) => arr.push({ text: t, type: t.indexOf('（本章完') === 0 ? 'end' : 'p' }));
+    /* 校勘记单独占末尾一行入口，点开在面板里看：翻页模式下没法就地展开，
+       硬塞在正文里又会挤掉一整页的字 */
+    const notes = chapterNotes(b, ch - 1);
+    if (notes.length) arr.push({ text: '注释 · ' + notes.length + ' 条', type: 'notes' });
     return arr;
   }
   function paginate(items, W, H) {
@@ -1396,10 +1410,12 @@
     /* 同一次分页里每种类型的 marginBottom 固定不变，预先算好缓存，
        避免在几百段正文里反复 getComputedStyle 触发强制样式重算 */
     const mMargin = {};
+    /* 每种类型用同一个探针量高度，class 必须和真正渲染时一致，否则行高对不上 */
+    const clsOf = (type) => (type === 'end' ? 'end-note' : type === 'no' ? 'reader-chapter-no' : type === 'notes' ? 'ch-notes-entry' : '');
     function marginOf(type) {
       if (!(type in mMargin)) {
         const el = type === 'h1' ? hProbe : type === 'no' ? nProbe : pProbe;
-        el.className = type === 'end' ? 'end-note' : type === 'no' ? 'reader-chapter-no' : '';
+        el.className = clsOf(type);
         mMargin[type] = parseFloat(getComputedStyle(el).marginBottom) || 0;
       }
       return mMargin[type];
@@ -1407,9 +1423,9 @@
     function measure(type, text, indent) {
       const el = type === 'h1' ? hProbe : type === 'no' ? nProbe : pProbe;
       el.textContent = text;
-      if (type === 'p' || type === 'end') {
+      if (type === 'p' || type === 'end' || type === 'notes') {
         el.style.textIndent = indent ? '2em' : '0';
-        el.className = type === 'end' ? 'end-note' : '';
+        el.className = clsOf(type);
       }
       return el.offsetHeight + marginOf(type);
     }
@@ -1427,6 +1443,13 @@
       if (h <= H) {
         flush();
         cur.push({ text: rest, type: it.type, indent: it.type === 'p' });
+        used = h;
+        continue;
+      }
+      /* 注释入口就一行：实在放不下就整行挪到下一页，别按字数腰斩 */
+      if (it.type !== 'p' && it.type !== 'end') {
+        flush();
+        cur.push({ text: rest, type: it.type, indent: false });
         used = h;
         continue;
       }
@@ -1459,6 +1482,7 @@
     fp.innerHTML = flipState.pages[flipState.page].map((it) => {
       if (it.type === 'no') return `<div class="reader-chapter-no">${esc(it.text)}</div>`;
       if (it.type === 'h1') return `<h1>${esc(it.text)}</h1>`;
+      if (it.type === 'notes') return `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} ${esc(it.text)}</button>`;
       return `<p class="${it.type === 'end' ? 'end-note' : ''}" style="${it.indent ? '' : 'text-indent:0'}">${esc(it.text)}</p>`;
     }).join('');
     void fp.offsetWidth;
@@ -2817,6 +2841,16 @@
         </div></div>
         <div class="rs-row rate-inline"><label>朗读</label>${rateSliderHtml(state.settings.rate, '语速 · 按住圆点拖动')}</div>
       </div>`;
+    } else if (kind === 'notes') {
+      /* 校勘记：竖排一列，字号比正文小一档，只在这里看，不占正文版面 */
+      const ch = Math.max(1, Number(readerRoot.dataset.currentCh) || 1);
+      const notes = chapterNotes(b, ch - 1);
+      panel.hidden = false;
+      panel.innerHTML = `<div class="reader-notes">
+        <div class="rn-head"><span>注释 · 第 ${ch} 章 · ${notes.length} 条</span>
+          <button class="icon-btn" data-action="panel-close" title="关闭">${icon('close', 'ic-sm')}</button></div>
+        <ul class="rn-list">${notes.map((t) => `<li>${esc(t)}</li>`).join('') || '<li>本章没有注释</li>'}</ul>
+      </div>`;
     } else if (kind === 'catalog' || kind === 'bookmark') {
       panel.hidden = true; drawer.hidden = false;
       ui.catalogTab = kind;
@@ -3467,6 +3501,7 @@
         break;
       }
       case 'open-panel': openPanel(val); break;
+      case 'open-notes': openPanel('notes'); break;
       case 'set-rate': applyRate(val); break;
       case 'reader-step': {
         const bid = readerRoot.dataset.currentBook; if (!bid) break;

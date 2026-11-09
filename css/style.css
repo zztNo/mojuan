@@ -570,8 +570,7 @@ img, svg { display: block; }
   border-top: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent);
   box-shadow: 0 -10px 30px rgba(0, 0, 0, .08); animation: fadeUp .25s ease both;
 }
-.rs-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; font-family: var(--font-ui); font-size: 12.5px; }
-.rs-row > label { width: 40px; color: var(--reader-sub); flex: none; }
+.rs-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; font-family: var(--font-ui); font-size: 12.5px; }.rs-row > label { width: 40px; color: var(--reader-sub); flex: none; }
 .rs-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .rs-pill { min-width: 44px; padding: 6px 9px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--reader-ink) 14%, transparent); font-size: 12.5px; }
 .rs-pill.active { border-color: var(--cinnabar); color: var(--cinnabar); background: var(--cinnabar-soft); }
@@ -1188,3 +1187,34 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
   .listen-tools button { padding: 6px 10px; font-size: 11px; }
   .listen-mini { bottom: calc(72px + env(safe-area-inset-bottom)); }
 }
+
+/* ---------- 章末注释（维基文库的校勘记） ---------- */
+/* 就一行、居中、虚线上沿，像书里的脚注分隔线，不抢正文 */
+.ch-notes-entry {
+  display: block; width: 100%; margin: 18px 0 6px; padding: 10px 0 4px;
+  border: 0; border-top: 1px dashed var(--ink-3, rgba(0,0,0,.18));
+  background: none; cursor: pointer;
+  font-family: var(--font-ui); font-size: 11.5px; line-height: 1.6;
+  text-align: center; color: var(--ink-3);
+  transition: color .18s;
+}
+.ch-notes-entry .ic { width: 12px; height: 12px; margin-right: 3px; vertical-align: -1px; }
+.ch-notes-entry:hover, .ch-notes-entry:focus-visible { color: var(--cinnabar); }
+.reader-notes {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+  max-height: 66%; display: flex; flex-direction: column;
+  background: color-mix(in srgb, var(--reader-bg) 97%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, .08); animation: fadeUp .25s ease both;
+}
+.rn-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 16px 8px; font-family: var(--font-ui); font-size: 12.5px; color: var(--reader-ink);
+}
+.rn-list {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  margin: 0; padding: 0 18px 24px; list-style: none;
+  font-family: var(--font-serif); font-size: 13px; line-height: 1.85; color: var(--reader-sub);
+}
+.rn-list li { padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 7%, transparent); }
+.rn-list li:last-child { border-bottom: 0; }

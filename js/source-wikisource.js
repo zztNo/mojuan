@@ -29,7 +29,7 @@
   const pageParas = {};      /* page -> string[] */
   /* 正文清洗是纯函数，抽到 js/wikisource-clean.js 统一维护（挂 window.MJ.clean），
      这里解构引用，不再本地重复定义。 */
-  const { cleanHtml, trimFoot, stripNav, splitParas, prettyTitle } = global.MJ.clean;
+  const { cleanHtml, trimFoot, splitNotes, stripNav, splitParas, prettyTitle } = global.MJ.clean;
   /* 页面 HTML 留一份：目录里链接的先后就是篇目次序，allpages 给不了这个 */
   const pageHtml = {};
   async function fetchPageRaw(page) {
@@ -39,9 +39,12 @@
     if (html) pageHtml[page] = html;   /* 取空了就不记，下次还有机会重取 */
     return html;
   }
-  async function fetchPage(page) {
+  /* 一页清洗完还会顺带把末尾的校勘记拆出来：正文归正文，注文归注文，
+     阅读器把注文折叠在章末的「注释」里，不再混着正文一起读 */
+  async function fetchPageParts(page) {
     const html = await fetchPageRaw(page);
-    return html ? trimFoot(cleanHtml(html)) : '';
+    if (!html) return { text: '', notes: [] };
+    return splitNotes(trimFoot(cleanHtml(html)));
   }
   /* 目录页里的链接：出现先后即篇目次序，链接文字即篇名（页面已转简体，文章原名多是繁体） */
   const domMeta = {};
@@ -129,7 +132,12 @@
     if (workCache[page]) return workCache[page];
     let chapters = [];
     let txt = '';
-    try { txt = await fetchPage(page); } catch (e) { /* 网络问题，走子页分支 */ }
+    let pageNotes = [];
+    try {
+      const head = await fetchPageParts(page);
+      txt = head.text;
+      pageNotes = head.notes;
+    } catch (e) { /* 网络问题，走子页分支 */ }
     /* 单页大书（古籍常是「第一难 / 卷第一 / 辨太阳病脉证并治」这类非「第X回」命名的章节）。
        准备几套候选分节标记，按特异性从高到低逐套试，选「命中 3~400 处、且平均每节≥100字」的那套——
        既能分章，又不会把满屏「第X回」的目录页误当成正文（目录页每节只有回目本身，平均很短）。 */
@@ -161,6 +169,11 @@
         chapters = [{ no: 1, title: page, inline: splitParas(txt) }];
       }
     }
+    /* 整本书挤在一个页面上的（难经、伤寒论这类），校勘记在页面末尾，
+       分章之后自然落在最后一章的尾巴上 —— 挂到最后一章，既不丢，也不再混进正文 */
+    if (pageNotes.length && chapters.length && !chapters[0].page) {
+      chapters[chapters.length - 1].notes = pageNotes;
+    }
     const result = { chapters };
     if (chapters.length) workCache[page] = result;
     return result;
@@ -170,8 +183,11 @@
     if (ch.inline) return ch.inline;
     const target = ch.page || page;
     if (pageParas[target]) return pageParas[target];
-    const txt = await fetchPage(target);
-    return txt ? splitParas(txt) : [];
+    const parts = await fetchPageParts(target);
+    if (parts.notes.length) ch.notes = parts.notes;
+    const paras = parts.text ? splitParas(parts.text) : [];
+    if (paras.length) pageParas[target] = paras;
+    return paras;
   }
 
   /* CATALOG:BEGIN —— 由 tools/ws_catalog.py 生成，勿手改 */
@@ -617,6 +633,14 @@
           };
         });
       } catch (e) { return []; }
+    },
+    /* 本章的校勘记（编者注）：目录构建或取正文时顺手挂到章节对象上，这里只读不取 */
+    getChapterNotes(id, no) {
+      const page = PAGE_OF[id] || (global.MJ.sources.getBook(id) || {}).page;
+      if (!page) return [];
+      const toc = workCache[page];
+      const ch = toc && toc.chapters[no - 1];
+      return (ch && ch.notes) || [];
     },
     async getChapter(id, no) {
       const page = PAGE_OF[id] || (global.MJ.sources.getBook(id) || {}).page;
