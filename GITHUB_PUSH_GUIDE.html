@@ -92,13 +92,18 @@
   <!-- 准备 -->
   <div class="step">
     <div class="num">0</div>
-    <h2>开始前：确认你电脑装了 Git</h2>
-    <p class="lead">推送要用到 Git 命令行。如果下面第 ③ 步打不开「Git Bash」，先装一下。</p>
+    <h2>先看这里：你可能根本不需要 Git Bash</h2>
+    <p class="lead">你这台电脑上的 Git 是随软件自带的（没有「Git Bash」这个图标可点），所以 <b>找不到 Git Bash 是正常的</b>，不用去装。</p>
     <div class="tip">
-      👉 去 <b>git-scm.com</b> 下载 Windows 版，一路默认下一步装好即可。<br>
-      装完之后，在任意文件夹右键，应该能看到「<b>Git Bash Here</b> / Open Git Bash」；或者开始菜单搜「Git Bash」也能找到。
+      ✅ 直接用 <b>PowerShell</b> 执行，命令效果完全一样。<br>
+      打开方式（任选一种）：<br>
+      ① <b>最快</b>：在资源管理器里打开 <b>mojuan</b> 文件夹 → 点一下顶部<b>地址栏</b> → 把路径删掉，输入 <b>powershell</b> → 回车。<br>
+      ② 按 <b>Win + R</b> → 输入 <b>powershell</b> → 回车，再自己 <b>cd</b> 到目录。<br>
+      ③ 开始菜单搜索 <b>PowerShell</b> 打开。
     </div>
-    <div class="warn">如果你已经能打开 Git Bash / PowerShell，<b>跳过这步</b>，直接从 ① 开始。</div>
+    <div class="warn"><b>关于「输进去没反应」：</b>这是正常的。<br>
+      <span class="cmd-i">git remote add origin ...</span> 这条命令<b>成功时不会打印任何东西</b>，静悄悄就是对了。<br>
+      想确认有没有成功，输 <span class="cmd-i">git remote -v</span> 回车，应该出现两行 origin 地址。</div>
   </div>
 
   <!-- 步骤 1：建仓库 -->
@@ -152,14 +157,32 @@
   <div class="step">
     <div class="num">3</div>
     <h2>在电脑上打开终端，粘贴 3 行命令</h2>
-    <p class="lead">右键墨卷文件夹 →「Git Bash Here」（或在项目目录里打开 Git Bash），把下面的命令整段粘进去，回车。</p>
+    <p class="lead">用 <b>PowerShell</b>（你这台机器推荐这个）。在 mojuan 文件夹里按上面第 ⓿ 步的方法打开终端，然后<b>一条一条</b>粘贴、每条回车。</p>
+    <div class="warn"><b>别一次粘三行：</b>一次粘多行时，终端有时只执行第一行，后面像"没反应"。</div>
 
     <div class="tabs">
-      <button id="tBash" class="active" onclick="switchTab('Bash')">Git Bash</button>
-      <button id="tPwsh" onclick="switchTab('Pwsh')">PowerShell</button>
+      <button id="tPwsh" class="active" onclick="switchTab('Pwsh')">PowerShell（推荐）</button>
+      <button id="tBash" onclick="switchTab('Bash')">Git Bash（如果你装了）</button>
     </div>
 
-    <div id="pBash">
+    <div id="pPwsh">
+      <div class="cmd">
+        <button class="copy" onclick="copyCmd('pwsh')">复制</button>
+        <span class="cm"># ① 进入项目目录（若已用地址栏方式打开终端，可跳过）</span>
+        cd "D:\15810\文档\WorkBuddy\NO.2\mojuan"
+
+        <span class="cm"># ② 关联远程仓库（成功时没有任何输出，是正常的）</span>
+        git remote remove origin <span class="cm">2>$null</span>
+        git remote add origin https://github.com/zztNo/mojuan.git
+        <span class="cm"># ②b 确认一下，应显示两行 origin 地址</span>
+        git remote -v
+
+        <span class="cm"># ③ 推送（这条才开始有输出）</span>
+        git push -u origin main
+      </div>
+    </div>
+
+    <div id="pBash" style="display:none">
       <div class="cmd">
         <button class="copy" onclick="copyCmd('bash')">复制</button>
         <span class="cm"># 进入项目目录</span>
@@ -167,21 +190,6 @@
 
         <span class="cm"># 关联远程仓库（若已存在先移除再添加，重复跑也不报错）</span>
         git remote remove origin <span class="cm">2>/dev/null</span>
-        git remote add origin https://github.com/zztNo/mojuan.git
-
-        <span class="cm"># 推送</span>
-        git push -u origin main
-      </div>
-    </div>
-
-    <div id="pPwsh" style="display:none">
-      <div class="cmd">
-        <button class="copy" onclick="copyCmd('pwsh')">复制</button>
-        <span class="cm"># 进入项目目录</span>
-        cd "D:\15810\文档\WorkBuddy\NO.2\mojuan"
-
-        <span class="cm"># 关联远程仓库（若已存在先移除再添加）</span>
-        git remote remove origin <span class="cm">2>$null</span>
         git remote add origin https://github.com/zztNo/mojuan.git
 
         <span class="cm"># 推送</span>
@@ -202,6 +210,11 @@
     <div class="num">?</div>
     <h2>常见问题</h2>
     <p class="lead">卡住了看这里。</p>
+    <div class="warn"><b>Q：命令粘进去，屏幕上什么都没出现？</b><br>
+      分两种：<br>
+      · <span class="cmd-i">git remote add ...</span> —— <b>成功就是不吭声</b>，别慌，用 <span class="cmd-i">git remote -v</span> 验证。<br>
+      · <span class="cmd-i">git push</span> 也完全没动静 —— 大概率在<b>等登录窗口</b>（它可能弹在别的窗口后面）。看看任务栏有没有新的登录窗口；或按 <b>Ctrl + C</b> 取消，然后先跑一次 <span class="cmd-i">git config --global credential.helper manager</span> 再 push。<br>
+      · 还有一种：把三行<b>一次全粘</b>进去，终端只执行了第一行。请改成一条一条粘。</div>
     <div class="warn"><b>Q：提示 <kbd>remote origin already exists</kbd>？</b><br>
       说明之前加过远程。直接用上面的命令（已含 <span class="cmd-i">git remote remove origin</span> 自动处理），或手动执行：<br>
       <span class="input fake" style="display:inline-block;font-size:13px">git remote set-url origin https://github.com/zztNo/mojuan.git</span> 再 push。</div>
@@ -237,6 +250,7 @@
       txt = 'cd "D:\\15810\\文档\\WorkBuddy\\NO.2\\mojuan"\n'+
             'git remote remove origin 2>$null\n'+
             'git remote add origin https://github.com/zztNo/mojuan.git\n'+
+            'git remote -v\n'+
             'git push -u origin main';
     }
     navigator.clipboard.writeText(txt).then(function(){
