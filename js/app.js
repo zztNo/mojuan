@@ -1756,9 +1756,12 @@
      但设备里也塞了不少"看着是多一个、其实是同一个"的条目，一律列出来只是噪音：
        · 中文 SAPI 的 Huihui / Yaoyao / Kangkang 常常是同一个拼接引擎换名字，念出来一模一样；
        · 英语的 David / Mark / Zira 这类机械音对读中文古籍毫无用处。
-     所以：同语言 + 同档位 + 同性别只留一个（正在用的那个永远保留），其它语言的机械音整组不收。 */
+     所以：同语言 + 同档位只留一个（正在用的那个永远保留），其它语言的机械音整组不收。
+     机械音不再按性别区分——SAPI 那几个（Huihui / Yaoyao / Kangkang）本来就是同一个引擎换了三个名字，
+     名字里那点性别暗示在设备上并不作数（Kangkang 实际念出来也不是男声），留着只会让人多试一次。 */
   function voiceKey(v) {
-    return String(v.lang || '').toLowerCase().replace(/_/g, '-') + '|' + voiceTier(v) + '|' + voiceGender(v);
+    const tier = voiceTier(v);
+    return String(v.lang || '').toLowerCase().replace(/_/g, '-') + '|' + tier + '|' + (tier === 2 ? '' : voiceGender(v));
   }
   function dedupeVoices(list) {
     const seen = new Set();
@@ -1791,7 +1794,7 @@
      所以列表里只显示「女声 · 自然」这样的短标签，语言压成两字，序号用来区分同名音色；
      完整原名保留在 title 里，想核对型号时悬停即可。 */
   const VOICE_FEMALE = /(huihui|yaoyao|xiaoxiao|xiaoyi|xiaochen|xiaohan|xiaomeng|xiaomo|xiaoxuan|xiaorui|xiaoshuang|xiaoyan|xiaoyou|xiaozhen|xiaobei|xiaoni|hiujin|tingting|meijia|sinji|tianran|lili|female|女声|女)/i;
-  const VOICE_MALE = /(kangkang|yunxi|yunyang|yunjian|yunfeng|yunhao|yunjie|yunye|yunze|yunxia|\bmale\b|男声|男)/i;
+  const VOICE_MALE = /(yunxi|yunyang|yunjian|yunfeng|yunhao|yunjie|yunye|yunze|yunxia|\bmale\b|男声|男)/i;
   function voiceGender(v) {
     const n = String(v.name || '');
     if (VOICE_FEMALE.test(n)) return '女';
