@@ -16,6 +16,11 @@
 
   const foots = ['检索自', '分类：', '分类:', '本作品', '版权所有', '数据项', '姊妹计划'];
 
+  /* 版权许可模板（{{PD-old}} / {{PD-old-100}} 等）会渲染成一整块横幅，挂在每个章节页末尾。
+     它的措辞是模板固定文案，古籍正文里不可能出现，所以不必受"后 40%"阈值约束，
+     出现在哪个位置都直接切断（短页面里 60% 阈值会漏掉，导致尾巴留下半句「…都属于」）。 */
+  const LIC_FOOTS = ['此作品在全世界', '本作品在全世界', '此作品在全世界都屬', 'Public domain', '公有领域 ，因为', '公有領域 ，因為'];
+
   function cleanHtml(html) {
     if (!html) return '';
     return html
@@ -32,6 +37,12 @@
          （「维基百科 条目：难经…」「本作品由于校订不足而错误百出…」就是这么来的） */
       .replace(/<table[^>]*class="[^"]*(?:sistersitebox|ambox|mbox|messagebox|dynlayout-exempt|noprint|navbox|metadata)[^"]*"[\s\S]*?<\/table>/g, ' ')
       .replace(/<ul[^>]*id="plainSister"[\s\S]*?<\/ul>/g, ' ')
+      /* 版权许可横幅（PD-old / CC 等模板渲染出来的那一大块）：
+         <div class="licenseContainer licenseBanner dynlayout-exempt"> … <div class="licensetpl">…</div></div>
+         它是正文结束后的最后一个块，直接连壳端掉，免得图片、Public domain 一类残留混进正文 */
+      .replace(/<div[^>]*class="[^"]*licenseContainer[^"]*"[\s\S]*?<div[^>]*class="[^"]*licensetpl[^"]*"[\s\S]*?<\/div>\s*<\/div>/gi, ' ')
+      .replace(/<div[^>]*class="[^"]*licenseContainer[^"]*"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/gi, ' ')
+      .replace(/<div[^>]*class="[^"]*licensetpl[^"]*"[\s\S]*?<\/div>/gi, ' ')
       .replace(/<div[^>]*class="[^"]*mw-message-box[^"]*"[\s\S]*?<\/div>/g, ' ')
       .replace(/<sup[^>]*class="[^"]*reference[^"]*"[\s\S]*?<\/sup>/g, ' ')
       /* 先还原 &nbsp;，否则「[ 编辑 ]」里的不换行空格会让下面的正则匹配不上 */
@@ -49,8 +60,12 @@
      这里只在文本后 40% 区域里用 lastIndexOf 找页脚，顶部导航框一律视为误报不截断。 */
   function trimFoot(txt) {
     if (!txt) return '';
-    const threshold = Math.floor(txt.length * 0.6);
     let t = txt;
+    for (const f of LIC_FOOTS) {
+      const i = t.indexOf(f);
+      if (i >= 0) t = t.slice(0, i);
+    }
+    const threshold = Math.floor(t.length * 0.6);
     for (const f of foots) {
       const i = t.lastIndexOf(f);
       if (i >= threshold) t = t.slice(0, i);

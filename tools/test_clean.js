@@ -22,12 +22,22 @@ eq('去掉 ws-header 导航表格', c.cleanHtml('<table class="ws-header"><tr><t
 eq('去掉 reference 上标', c.cleanHtml('<p>甲<sup class="reference">[1]</sup>乙</p>'), '甲 乙');
 eq('&nbsp; 转空格并折叠', c.cleanHtml('<p>甲&nbsp;&nbsp;乙</p>'), '甲 乙');
 eq('空输入返回空', c.cleanHtml(''), '');
+/* 每个章节页末尾都挂着 {{PD-old}} 版权横幅，两个层次都要断根：
+   HTML 层按 licenseContainer 剥壳 + 文本层按页脚标记兜底 */
+eq('去掉版权许可横幅', c.cleanHtml(
+  '<p>正文</p><div class="licenseContainer licenseBanner dynlayout-exempt">' +
+  '<div><div><div><div><p>此作品在全世界都属于<b>公有领域</b>，因为作者逝世已经超过100年。</p></div></div></div></div>' +
+  '<div class="licensetpl"><p><span>Public domain</span></p></div></div>'
+), '正文');
 
 console.log('trimFoot');
 /* 页脚标记只在正文末尾才截断；短文本里出现的「分类：」属于正文，不能拦腰砍 */
 eq('末尾页脚被截断', c.trimFoot('正文很长'.repeat(20) + '分类：某某'), '正文很长'.repeat(20));
 eq('顶部导航框不误杀', c.trimFoot('姊妹计划：百科 数据项 ' + '正文很长'.repeat(30)), '姊妹计划：百科 数据项 ' + '正文很长'.repeat(30));
 eq('无标记原样返回', c.trimFoot('正文没有标记'), '正文没有标记');
+/* 版权横幅万一漏过 HTML 剥壳，文本层也要在末尾切断 */
+eq('末尾版权声明被截断', c.trimFoot('正文很长'.repeat(20) + '此作品在全世界都属于 公有领域 ，因为作者逝世已经超过100年。Public domain Public domain false false'), '正文很长'.repeat(20));
+eq('顶部出现「此作品」不误杀', c.trimFoot('此作品为残卷 ' + '正文很长'.repeat(30)), '此作品为残卷 ' + '正文很长'.repeat(30));
 eq('空输入兜底', c.trimFoot(''), '');
 
 console.log('stripNav');
