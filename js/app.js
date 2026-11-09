@@ -1709,6 +1709,9 @@
     const n = (v.name || '').toLowerCase();
     if (/natural|neural|online|premium|enhanced|google|siri/.test(n)) return 0;
     if (/huihui|kangkang|yaoyao|sapi|espeak|compact|pico/.test(n)) return 2;
+    /* Windows 上凡是「Microsoft xxx - Language (Country)」又不带 Natural/Online 的，都是老式 SAPI 拼接音
+       （David / Mark / Zira / Huihui / Kangkang / Yaoyao 全在此列）。名字里没有 sapi 字样，只能靠这个特征认。 */
+    if (/^microsoft/.test(n) && / - /.test(n)) return 2;
     return 1;
   }
   function voiceTag(v) {
@@ -1722,10 +1725,27 @@
     const all = speechSynthesis.getVoices() || [];
     const zh = all.filter((v) => /zh|cmn|Chinese/i.test(v.lang + ' ' + v.name));
     const list = zh.length ? zh : all;
-    return list.slice().sort((a, b) => voiceTier(a) - voiceTier(b));
+    return dedupeVoices(list.slice().sort((a, b) => voiceTier(a) - voiceTier(b)));
   }
   /* 面板要「设备里有什么就让人看见什么」：中文音色排前面，其它语言另起一组跟在后面。
-     以前只列中文，用户装的粤语/日语/英语音色在面板里根本看不到，像是没有。 */
+     以前只列中文，用户装的粤语/日语/英语音色在面板里根本看不到，像是没有。
+     但设备里也塞了不少"看着是多一个、其实是同一个"的条目，一律列出来只是噪音：
+       · 中文 SAPI 的 Huihui / Yaoyao / Kangkang 常常是同一个拼接引擎换名字，念出来一模一样；
+       · 英语的 David / Mark / Zira 这类机械音对读中文古籍毫无用处。
+     所以：同语言 + 同档位 + 同性别只留一个（正在用的那个永远保留），其它语言的机械音整组不收。 */
+  function voiceKey(v) {
+    return String(v.lang || '').toLowerCase().replace(/_/g, '-') + '|' + voiceTier(v) + '|' + voiceGender(v);
+  }
+  function dedupeVoices(list) {
+    const seen = new Set();
+    return list.filter((v) => {
+      if (listen.voiceURI && v.voiceURI === listen.voiceURI) return true;
+      const k = voiceKey(v);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
   function listenVoiceGroups() {
     if (!speechOK()) return { zh: [], other: [] };
     const all = speechSynthesis.getVoices() || [];
@@ -1735,7 +1755,10 @@
       else other.push(v);
     });
     const byTier = (a, b) => voiceTier(a) - voiceTier(b) || String(a.name).localeCompare(String(b.name));
-    return { zh: zh.sort(byTier), other: other.sort(byTier) };
+    return {
+      zh: dedupeVoices(zh.sort(byTier)),
+      other: dedupeVoices(other.filter((v) => voiceTier(v) !== 2 || v.voiceURI === listen.voiceURI).sort(byTier))
+    };
   }
   const TIER_LABEL = ['自然', '通用', '机械'];
 
