@@ -314,7 +314,8 @@
     descOpen: false, nav: 'store', editMode: false, selected: new Set(), longPressed: false,
     coverDraft: null, flipHint: null, flipSwiped: false,
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
-    shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '', seekDragAt: 0, metaDraft: null,
+    shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
+    noteSearch: '', noteBook: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
@@ -591,6 +592,13 @@
     const ids = Array.from(ui.selected);
     if (!ids.length) { toast('先选几卷'); return; }
     const localIds = ids.filter((x) => (getBook(x) || {}).local);
+    /* 导出正文不要求「本地卷」：在线卷只要读过、缓存里有章节，也能导出那几章 */
+    const exportableIds = ids.filter((x) => {
+      const b = getBook(x); if (!b) return false;
+      if (b.local) return true;
+      const rec = contentCache[x];
+      return !!(rec && rec.chapters && rec.chapters.some(Boolean));
+    });
     const allPinned = ids.every((x) => state.pinned.includes(x));
     let root = $('#shelfActions');
     if (!root) {
@@ -623,7 +631,7 @@
           <div class="as-grid">
             <button class="as-item" data-action="bulk-copy-list">${icon('list', 'ic-sm')}<span>复制卷单</span></button>
             <button class="as-item" data-action="bulk-export-list">${icon('brush', 'ic-sm')}<span>下载卷单</span></button>
-            <button class="as-item" data-action="bulk-export-books" ${localIds.length ? '' : 'disabled'}>${icon('book', 'ic-sm')}<span>导出正文 (${localIds.length})</span></button>
+            <button class="as-item" data-action="bulk-export-books" ${exportableIds.length ? '' : 'disabled'}>${icon('book', 'ic-sm')}<span>导出正文 (${exportableIds.length})</span></button>
           </div>
           ${localIds.length ? `<button class="as-row danger" data-action="batch-delete">${icon('trash', 'ic-sm')}<span>彻底删除这 ${localIds.length} 卷本地卷</span>${icon('right', 'ic-sm')}</button>` : ''}
         </div>
@@ -751,22 +759,31 @@
   }
   async function exportLocalBooks(ids) {
     const chunks = [];
-    let n = 0;
+    let n = 0, onlineN = 0;
     for (const id of ids) {
-      const b = getBook(id); if (!b || !b.local) continue;
+      const b = getBook(id); if (!b) continue;
       let rec = contentCache[id];
-      if (!rec) { try { rec = await loadContent(id); } catch (e) { rec = null; } }
+      /* 在线卷只导出已读进缓存的章节，绝不为了导出去联网抓全书 */
+      if (!rec && b.local) { try { rec = await loadContent(id); } catch (e) { rec = null; } }
       if (!rec || !rec.chapters) continue;
-      chunks.push('《' + b.title + '》 ' + b.author + '\n');
-      rec.chapters.forEach((c) => {
+      const chs = rec.chapters.filter(Boolean);
+      if (!chs.length) continue;
+      const online = !b.local;
+      if (online) onlineN += 1;
+      chunks.push('《' + b.title + '》 ' + b.author + (online ? ' · 已缓存章节' : '') + ' · 共 ' + chs.length + ' 章\n');
+      chs.forEach((c) => {
         chunks.push('\n' + c.title + '\n');
         (c.paras || []).forEach((p) => chunks.push('　　' + p + '\n'));
       });
       chunks.push('\n\n————————————\n\n');
       n += 1;
+      if (n % 3 === 0) toast('正在整理…已处理 ' + n + ' 卷');
     }
-    if (!n) { toast('没有可导出的本地卷正文'); return; }
-    toast(downloadText('墨卷-导出正文.txt', chunks.join('')) ? '已导出 ' + n + ' 卷正文' : '导出失败');
+    if (!n) { toast('没有可导出的正文 · 在线卷需先读过几章才有缓存'); return; }
+    const header = '墨卷 · 正文导出\n导出时间：' + new Date().toLocaleString('zh-CN')
+      + '\n共 ' + n + ' 卷' + (onlineN ? '（其中 ' + onlineN + ' 卷为在线已缓存章节）' : '') + '\n\n';
+    const ok = downloadText('墨卷-导出正文.txt', header + chunks.join(''));
+    toast(ok ? '已导出 ' + n + ' 卷正文' : '导出失败，请检查浏览器下载权限');
   }
   function bannerArt(b, i) {
     return D.motifSvg(b.motif, b.color, b.color2, 'ban' + i).replace('class="cover-art"', 'class="cover-art banner-art"');
@@ -960,7 +977,7 @@
       (tab === 'category' ? pageCategory() : tab === 'rank' ? pageRank() : pageStore());
   }
   /* ---------- 藏卷搜索：直接切 hidden，不重渲染，保住输入焦点与滚动位置 ---------- */
-  let shelfSearchTimer = null;
+  let shelfSearchTimer = null, noteSearchTimer = null;
   function applyShelfSearch(v) {
     ui.shelfSearch = v || '';
     const q = ui.shelfSearch.toLowerCase();
@@ -1303,17 +1320,27 @@
     });
     if (annAll.length) {
       annAll.sort((x, y) => (y.a.time || 0) - (x.a.time || 0));
+      const noteBooks = [];
+      annAll.forEach(({ bid }) => { if (!noteBooks.includes(bid)) noteBooks.push(bid); });
       html += `<div class="section">${sectionHead('我的笔记 · ' + annAll.length, '', '')}
+        <div class="shelf-search">${icon('search', 'ic-sm')}<input id="noteSearch" placeholder="搜原文 / 批注 / 书名" value="${esc(ui.noteSearch || '')}" autocomplete="off">
+          <select id="noteBookFilter" class="note-book-filter" aria-label="按卷筛选">
+            <option value="">全部卷</option>
+            ${noteBooks.map((bid) => `<option value="${esc(bid)}" ${ui.noteBook === bid ? 'selected' : ''}>《${esc((getBook(bid) || {}).title || bid)}》</option>`).join('')}
+          </select>
+          <button class="shelf-search-clear" data-action="clear-note-search" title="清空" ${ui.noteSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>
         <div class="setting-list">
           ${annAll.map(({ bid, a, i }) => {
             const bt = (getBook(bid) || {}).title || '已删除的卷';
             const frag = a.text.length > 42 ? a.text.slice(0, 42) + '…' : a.text;
-            return `<div class="setting-row">
-              <div class="st" style="cursor:pointer" data-action="open-annotation" data-id="${esc(bid)}" data-val="${i}">《${esc(bt)}》<small>${esc(frag)}${a.note ? ' · 批注：' + esc(a.note) : ''} · 第 ${a.ch} 章</small></div>
+            const hay = (bt + ' ' + a.text + ' ' + (a.note || '') + ' 第' + a.ch + '章').toLowerCase();
+            return `<div class="setting-row" data-note-item="1" data-note-book="${esc(bid)}" data-note-search="${esc(hay)}">
+              <div class="st" style="cursor:pointer" data-action="open-annotation" data-id="${esc(bid)}" data-val="${i}">《${esc(bt)}》<small><i class="ann-dot hl-${esc(a.color || 'red')}"></i>${esc(frag)}${a.note ? ' · 批注：' + esc(a.note) : ''} · 第 ${a.ch} 章</small></div>
               <button class="btn btn-ghost btn-sm btn-danger" data-action="annotation-del-global" data-id="${esc(bid)}" data-val="${i}">删除</button>
             </div>`;
           }).join('')}
-        </div></div>`;
+        </div>
+        <div id="noteNoMatch" class="cat-empty" hidden>没有匹配的笔记<br><small>换个词，或把「按卷」切回全部卷</small></div></div>`;
     }
     html += `<div class="section">${sectionHead('卷档管理', '', '')}
       <div class="setting-list">
@@ -1425,6 +1452,8 @@
       <div class="hl-pop" id="hlPop" hidden>
         <button class="hl-btn" data-action="hl-save">划线</button>
         <button class="hl-btn" data-action="hl-note-open">批注</button>
+        <span class="hl-colors" id="hlColors">${[['red', '朱砂'], ['jade', '青竹'], ['gold', '泥金']].map(([k, l]) =>
+          `<button class="hl-dot hl-${k} ${ui.hlColor === k ? 'active' : ''}" data-action="hl-color" data-val="${k}" title="${l}" aria-label="${l}"></button>`).join('')}</span>
         <div class="hl-note" id="hlNote" hidden>
           <textarea id="hlNoteInput" rows="2" placeholder="写点想法（可留空）"></textarea>
           <button class="hl-btn primary" data-action="hl-save-note">保存</button>
@@ -1697,18 +1726,38 @@
   /* 把本章本段的所有划线一次性套 <mark>：先 esc 再单次正则替换，
      既防 XSS，又避免多条重叠划线把已插入的标签二次拆坏。 */
   function highlightHtml(raw, bid, ch, pi) {
-    const qs = annotationList(bid).filter((a) => a.ch === ch && a.pi === pi && a.text)
-      .map((a) => esc(String(a.text).trim())).filter(Boolean);
     const out = esc(raw);
-    if (!qs.length) return out;
-    qs.sort((x, y) => y.length - x.length);
-    return out.replace(new RegExp('(' + qs.map(escRe).join('|') + ')', 'g'), '<mark class="hl-mark">$1</mark>');
+    /* 文本 -> 颜色，单次正则替换：多色、重叠、特殊字符都不会把标签拆坏 */
+    const map = new Map();
+    const valid = ['red', 'jade', 'gold'];
+    annotationList(bid).filter((a) => a.ch === ch && a.pi === pi && a.text).forEach((a) => {
+      const q = esc(String(a.text).trim());
+      if (q && !map.has(q)) map.set(q, valid.includes(a.color) ? a.color : 'red');
+    });
+    if (!map.size) return out;
+    const qs = Array.from(map.keys()).sort((x, y) => y.length - x.length);
+    const re = new RegExp('(' + qs.map(escRe).join('|') + ')', 'g');
+    return out.replace(re, (m) => '<mark class="hl-mark hl-' + (map.get(m) || 'red') + '">' + m + '</mark>');
   }
   /* 只重刷受影响的那一段（或翻页拆出来的几块），不整页重渲染，滚动位置不丢 */
   function refreshHlParas(bid, ch, pi) {
     $$('#readerPaper p[data-pi="' + pi + '"], #flipPage p[data-fi="' + (pi + 2) + '"]').forEach((el) => {
       el.innerHTML = highlightHtml(el.textContent, bid, ch, pi);
     });
+  }
+  const NOTE_COLORS = { red: '朱砂', jade: '青竹', gold: '泥金' };
+  /* 笔记总览的筛选同样走 DOM hidden，不重渲染，输入焦点和滚动都在 */
+  function applyNoteFilter() {
+    const q = (ui.noteSearch || '').toLowerCase();
+    const bk = ui.noteBook || '';
+    let shown = 0;
+    $$('[data-note-item]').forEach((el) => {
+      const hit = (!q || (el.dataset.noteSearch || '').includes(q)) && (!bk || el.dataset.noteBook === bk);
+      el.hidden = !hit;
+      if (hit) shown += 1;
+    });
+    const nm = $('#noteNoMatch'); if (nm) nm.hidden = shown > 0;
+    const clr = $('.shelf-search-clear'); if (clr) clr.hidden = !ui.noteSearch;
   }
   /* 把散在各卷的划线/批注收成一个 TXT，方便留存或搬到别处 */
   function exportAnnotations() {
@@ -1720,7 +1769,7 @@
       const b = getBook(bid);
       lines.push('《' + ((b && b.title) || bid) + '》' + (b && b.author ? ' · ' + b.author : ''));
       list.slice().sort((x, y) => x.ch - y.ch || x.pi - y.pi || x.time - y.time).forEach((a) => {
-        lines.push('  第 ' + a.ch + ' 章 · 第 ' + (a.pi + 1) + ' 段');
+        lines.push('  第 ' + a.ch + ' 章 · 第 ' + (a.pi + 1) + ' 段 · ' + (NOTE_COLORS[a.color || 'red'] || '朱砂'));
         lines.push('  原文：' + a.text);
         if (a.note) lines.push('  批注：' + a.note);
         lines.push('  ' + new Date(a.time).toLocaleDateString('zh-CN'));
@@ -1763,7 +1812,7 @@
     const below = r.bottom + 120 < window.innerHeight;
     pop.dataset.below = below ? '1' : '0';
     pop.hidden = false;
-    pop.style.left = Math.max(92, Math.min(window.innerWidth - 92, r.left + r.width / 2)) + 'px';
+    pop.style.left = Math.max(132, Math.min(window.innerWidth - 132, r.left + r.width / 2)) + 'px';
     pop.style.top = (below ? r.bottom + 8 : Math.max(10, r.top - 8)) + 'px';
     if (note) note.hidden = true;
   }
@@ -1771,8 +1820,10 @@
     if (!hlDraft) return;
     const d = hlDraft;
     const list = state.annotations[d.bid] || (state.annotations[d.bid] = []);
-    const dup = list.some((a) => a.ch === d.ch && a.pi === d.pi && a.text === d.text && (a.note || '') === (note || ''));
-    if (!dup) { list.push({ ch: d.ch, pi: d.pi, text: d.text, note: note || '', time: Date.now() }); save(); }
+    const col = ui.hlColor || 'red';
+    const dup = list.some((a) => a.ch === d.ch && a.pi === d.pi && a.text === d.text
+      && (a.note || '') === (note || '') && (a.color || 'red') === col);
+    if (!dup) { list.push({ ch: d.ch, pi: d.pi, text: d.text, note: note || '', color: col, time: Date.now() }); save(); }
     refreshHlParas(d.bid, d.ch, d.pi);
     hideHlPop();
     try { window.getSelection().removeAllRanges(); } catch (e) { /* 忽略 */ }
@@ -1785,7 +1836,7 @@
       .sort((x, y) => x.a.ch - y.a.ch || x.a.pi - y.a.pi || x.a.time - y.a.time);
     return `<div class="catalog-list ann-list">${items.map(({ a, i }) => `
       <li class="ann-item" data-action="annotation-goto" data-val="${i}">
-        <div class="ann-text">${esc(a.text.length > 64 ? a.text.slice(0, 64) + '…' : a.text)}</div>
+        <div class="ann-text"><i class="ann-dot hl-${esc(a.color || 'red')}"></i>${esc(a.text.length > 64 ? a.text.slice(0, 64) + '…' : a.text)}</div>
         ${a.note ? `<div class="ann-note">${esc(a.note)}</div>` : ''}
         <div class="ann-meta">第 ${a.ch} 章 · 第 ${a.pi + 1} 段 · ${new Date(a.time).toLocaleDateString('zh-CN')}</div>
         <button class="bm-del" data-action="annotation-del" data-val="${i}" title="删除">${icon('trash', 'ic-sm')}</button>
@@ -1873,12 +1924,13 @@
     bookId: null, ch: 1, paras: [], text: '',
     sents: [], sentIndex: 0,
     charIndex: 0, paraIndex: 0,
-    rate: 1, voiceURI: '', timerMin: 0, timerAt: 0, scope: 'book',
+    rate: 1, voiceURI: '', timerMin: 0, timerAt: 0, scope: 'book', fadeOut: false,
     elapsed: 0, startedAt: 0, lastStart: 0, boundaryOK: false,
     remoteOff: false,
     prevOverflow: ''
   };
   let ttsGen = 0, listenTimer = null, listenTick = null, keepAudio = null, lastCommit = 0;
+  let listenFadeTimer = null;
   /* 在线音色：合成的音频、正在播的 <audio>、失败回退标记 */
   let remoteAudio = null, remoteUrl = null, remoteWarned = false;
   const audioCache = new Map();
@@ -2067,7 +2119,8 @@
     const cover = $('#listenCover'); if (cover) cover.classList.toggle('playing', listen.playing);
     const rate = $('#ltRate'); if (rate) rate.textContent = '语速 ' + fmtRate(listen.rate) + '×';
     const timer = $('#ltTimer');
-    if (timer) timer.textContent = listen.timerMin ? '定时 ' + Math.max(0, Math.ceil((listen.timerAt - Date.now()) / 60000)) + '分' : '定时';
+    if (timer) timer.textContent = listen.fadeOut ? '即将收卷'
+      : (listen.timerMin ? '定时 ' + Math.max(0, Math.ceil((listen.timerAt - Date.now()) / 60000)) + '分' : '定时');
     const t = $('#ttsBtn'); if (t) t.classList.toggle('tts-on', listen.active);
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.playbackState = listen.playing ? 'playing' : 'paused'; } catch (e) { /* 忽略 */ }
@@ -2320,6 +2373,8 @@
   }
   function listenPlaySent(gen) {
     if (gen !== ttsGen || !listen.active) return;
+    /* 定时收尾：当前这句已在 onend 里念完，不再排下一句，本地与在线音色两条路径都走这里 */
+    if (listen.fadeOut) { listenFinishFade(); return; }
     const s = listen.sents[listen.sentIndex];
     if (!s) { listenChapterDone(); return; }
     if (listenRemoteOn()) { listenPlayRemote(gen, s); return; }
@@ -2365,6 +2420,8 @@
     } catch (e) { listen.playing = false; toast('朗读启动失败'); listenRenderDynamic(); }
   }
   function listenPause() {
+    /* 手动暂停就取消这次收尾，之后再点播放能继续听 */
+    clearTimeout(listenFadeTimer); listenFadeTimer = null; listen.fadeOut = false;
     ttsGen += 1;
     listenDropAudio();
     try { speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
@@ -2699,7 +2756,25 @@
     else if (c.provider === 'openai') patch.openai = { base: g('vfBase') || 'https://api.openai.com/v1', key: g('vfKey'), model: g('vfModel') || 'tts-1', voice: g('vfVoice') || 'alloy' };
     v.setConfig(patch);
   }
+  /* 定时到点不硬断：等当前这句自然念完再收尾；15 秒兜底防超长句卡住 */
+  function listenFinishFade() {
+    clearTimeout(listenFadeTimer); listenFadeTimer = null;
+    if (!listen.fadeOut || !listen.active) return;
+    listen.fadeOut = false;
+    ttsGen += 1;
+    try { if (speechOK()) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
+    listenDropAudio();
+    if (listen.startedAt) { listen.elapsed += (Date.now() - listen.startedAt) / 1000; listen.startedAt = 0; }
+    listen.timerMin = 0; listen.timerAt = 0;
+    listen.playing = false;
+    listenReleaseWakeLock();
+    listenCommitProgress();
+    listenRenderDynamic();
+    const lt = $('#ltTimer'); if (lt) lt.textContent = '定时';
+    toast('定时结束，听卷已收');
+  }
   function listenStopAll() {
+    clearTimeout(listenFadeTimer); listenFadeTimer = null; listen.fadeOut = false;
     ttsGen += 1;
     try { if (speechOK()) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     clearTimeout(listenTimer); clearInterval(listenTick);
@@ -3298,6 +3373,7 @@
     }
     view.innerHTML = html;
     if (r.name === 'shelf') applyShelfSearch(ui.shelfSearch);
+    if (r.name === 'me') applyNoteFilter();
     a11ySweep(view);
     markScrollableRows(view);
     window.scrollTo(0, pendingScroll);
@@ -3514,6 +3590,12 @@
         const inp = $('#shelfSearch');
         if (inp) { inp.value = ''; inp.focus(); }
         applyShelfSearch('');
+        break;
+      }
+      case 'clear-note-search': {
+        const inp = $('#noteSearch');
+        if (inp) { inp.value = ''; inp.focus(); }
+        ui.noteSearch = ''; applyNoteFilter();
         break;
       }
       case 'open-shelf-actions': openShelfActions(); break;
@@ -3810,7 +3892,14 @@
         clearTimeout(listenTimer);
         if (listen.timerMin) {
           listen.timerAt = Date.now() + listen.timerMin * 60000;
-          listenTimer = setTimeout(() => { listenStopAll(); toast('定时结束，已停止听卷'); }, listen.timerMin * 60000);
+          listenTimer = setTimeout(() => {
+            if (!listen.active) return;
+            listen.fadeOut = true;
+            toast('定时到了，等这一句念完就收');
+            listenRenderDynamic();
+            /* 超长句兜底：15 秒后无论如何收尾，避免一直停不下来 */
+            listenFadeTimer = setTimeout(() => { if (listen.active && listen.fadeOut) listenFinishFade(); }, 15000);
+          }, listen.timerMin * 60000);
         } else listen.timerAt = 0;
         listenPanel('timer'); listenRenderDynamic();
         toast(listen.timerMin ? '将在 ' + listen.timerMin + ' 分钟后停止' : '已取消定时');
@@ -3842,6 +3931,11 @@
       case 'open-panel': openPanel(val); break;
       case 'open-notes': openPanel('notes'); break;
       case 'hl-save': saveHl(''); break;
+      case 'hl-color': {
+        ui.hlColor = val === 'jade' || val === 'gold' ? val : 'red';
+        $$('#hlColors .hl-dot').forEach((b) => b.classList.toggle('active', b.dataset.val === ui.hlColor));
+        break;
+      }
       case 'hl-note-open': {
         const n = $('#hlNote'), i = $('#hlNoteInput');
         if (n) n.hidden = false;
@@ -3987,6 +4081,11 @@
       const v = e.target.value;
       shelfSearchTimer = setTimeout(() => applyShelfSearch(v), 120);
     }
+    if (e.target.id === 'noteSearch') {
+      clearTimeout(noteSearchTimer);
+      const v = e.target.value;
+      noteSearchTimer = setTimeout(() => { ui.noteSearch = v; applyNoteFilter(); }, 120);
+    }
     if (e.target.id === 'catalogSearch') {
       /* 长篇在线书目录上千条，逐键遍历全部 <li> 会卡，轻量防抖：停输 120ms 才过滤 */
       clearTimeout(catalogSearchTimer);
@@ -4005,6 +4104,7 @@
   /* 拖动松手才真正应用，避免播放中每移动一像素就重启朗读 */
   document.addEventListener('change', (e) => {
     if (e.target.matches && e.target.matches('[data-rate-slider]')) applyRate(e.target.value);
+    if (e.target.id === 'noteBookFilter') { ui.noteBook = e.target.value; applyNoteFilter(); }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -4012,6 +4112,10 @@
       const si = $('#shelfSearch');
       if (si && si.value && document.activeElement === si) {
         e.preventDefault(); si.value = ''; applyShelfSearch(''); return;
+      }
+      const ni = $('#noteSearch');
+      if (ni && ni.value && document.activeElement === ni) {
+        e.preventDefault(); ni.value = ''; ui.noteSearch = ''; applyNoteFilter(); return;
       }
       if ($('#hlPop') && !$('#hlPop').hidden) { hideHlPop(); return; }
       if (ui.coverDraft) { closeCoverEditor(); return; }

@@ -1064,6 +1064,20 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .ann-note { margin-top: 5px; font-size: 12.5px; color: var(--cinnabar); line-height: 1.6; }
 .ann-meta { margin-top: 5px; font-size: 11px; color: var(--reader-sub); }
 .ann-item .bm-del { position: absolute; right: 8px; top: 10px; }
+/* ---------- 多色划线 ---------- */
+.hl-mark.hl-jade { background: color-mix(in srgb, var(--jade) 26%, transparent); box-shadow: inset 0 -2px 0 var(--jade); }
+.hl-mark.hl-gold { background: color-mix(in srgb, var(--gold) 30%, transparent); box-shadow: inset 0 -2px 0 var(--gold); }
+.hl-colors { display: flex; align-items: center; gap: 5px; padding: 0 3px; }
+.hl-dot { width: 15px; height: 15px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.hl-dot.hl-red { background: var(--cinnabar); }
+.hl-dot.hl-jade { background: var(--jade); }
+.hl-dot.hl-gold { background: var(--gold); }
+.hl-dot.active { border-color: var(--reader-ink); box-shadow: 0 0 0 1px var(--reader-bg); }
+.ann-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.ann-dot.hl-red { background: var(--cinnabar); }
+.ann-dot.hl-jade { background: var(--jade); }
+.ann-dot.hl-gold { background: var(--gold); }
+.note-book-filter { max-width: 132px; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; }
 .mini-tag {
   margin-left: 5px; padding: 0 4px; border-radius: 4px; white-space: nowrap;
   font-size: 10px; color: var(--jade); border: 1px solid var(--line);
