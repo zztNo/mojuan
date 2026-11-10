@@ -13,6 +13,9 @@ tools/cache/
 # 依赖
 node_modules/
 
+# 桌面打包产物（Electron 构建输出）
+desktop/dist/
+
 # 日志
 *.log
 

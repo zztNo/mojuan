@@ -1915,15 +1915,33 @@
     /* 边听边读时把正文滚到当前段，眼睛跟得上耳朵 */
     if (!listen.expanded) listenScrollToPara();
   }
-  let lastFollow = 0;
+  let lastFollow = 0, lastLP = null;
+  /* 听书时尽量不让设备锁屏熄火：WakeLock 比静音音轨保活更优雅，不支持的浏览器自动跳过，
+     原有 keepAlive 静音音轨仍作兜底 */
+  let wakeLock = null;
+  async function listenWakeLock() {
+    if (!listen.playing) return;
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* 不支持或被拒都不影响 */ }
+  }
+  function listenReleaseWakeLock() {
+    if (wakeLock) { try { wakeLock.release(); } catch (e) { /* 忽略 */ } wakeLock = null; }
+  }
+  document.addEventListener('visibilitychange', () => { if (listen.playing && !document.hidden) listenWakeLock(); });
   function listenScrollToPara() {
     const b = getBook(listen.bookId); if (!b) return;
     if (readerRoot.dataset.currentBook !== b.id) return;
-    if (Date.now() - lastFollow < 2500) return;
     const paras = readerRoot.querySelectorAll('#readerBody .reader-paper p');
     const target = paras[Math.max(0, listen.paraIndex - 1)];
     if (!target) return;
+    /* 高亮当前朗读的段落：与滚动解耦，段落一切换就更新，不受 2.5s 滚动节流影响。
+       Windows SAPI 不触发 onboundary 也能稳定高亮（用的是句子所属的段落信息）。 */
+    if (target !== lastLP) {
+      if (lastLP) lastLP.classList.remove('lp-active');
+      target.classList.add('lp-active');
+      lastLP = target;
+    }
     const r = target.getBoundingClientRect();
+    if (Date.now() - lastFollow < 2500) return;
     if (r.top > window.innerHeight * 0.8 || r.bottom < window.innerHeight * 0.15) {
       lastFollow = Date.now();
       target.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -2109,6 +2127,7 @@
     try { if (speechOK()) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     if (!resume) { listen.sentIndex = 0; listen.elapsed = 0; listen.charIndex = 0; }
     listen.playing = true;
+    listenWakeLock();
     listen.startedAt = Date.now();
     listen.boundaryOK = false;
     listenPlaySent(gen);
@@ -2165,6 +2184,7 @@
     try { speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     if (listen.startedAt) { listen.elapsed += (Date.now() - listen.startedAt) / 1000; listen.startedAt = 0; }
     listen.playing = false;
+    listenReleaseWakeLock();
     listenCommitProgress();
     listenRenderDynamic();
   }
@@ -2503,6 +2523,8 @@
     listenKeepAlive(false);
     const l = $('#listenRoot'); if (l) l.remove();
     const t = $('#ttsBtn'); if (t) t.classList.remove('tts-on');
+    if (lastLP) { try { lastLP.classList.remove('lp-active'); } catch (e) { /* 忽略 */ } lastLP = null; }
+    listenReleaseWakeLock();
     document.body.style.overflow = listen.prevOverflow || '';
   }
   async function openListen(id, ch) {
