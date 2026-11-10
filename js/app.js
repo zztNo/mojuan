@@ -2166,6 +2166,7 @@
     rate: 1, voiceURI: '', timerMin: 0, timerAt: 0, scope: 'book', fadeOut: false,
     elapsed: 0, startedAt: 0, lastStart: 0, boundaryOK: false,
     remoteOff: false,
+    dragging: false,
     prevOverflow: ''
   };
   let ttsGen = 0, listenTimer = null, listenTick = null, keepAudio = null, lastCommit = 0;
@@ -2420,6 +2421,8 @@
   }
   function listenFollowPara() {
     const b = getBook(listen.bookId); if (!b) return;
+    /* 正在拖悬浮球时别顺手滚正文：手上一动、页面一跳，感觉就像球被拽住了 */
+    if (listen.dragging) return;
     if (readerRoot.dataset.currentBook !== b.id) return;
     if (state.settings.pageMode === 'flip') { listenFlipFollow(); return; }
     if (listen.expanded) return;
@@ -2830,46 +2833,77 @@
     listenRenderDynamic();
     if (listen.active) listenMediaSession(true);
   }
+  /* 悬浮球拖动：逐帧只写一次 transform（走合成层，不触发布局），
+     宽高与活动范围在按下时量一次，避免「写样式→读 offsetWidth→再写」的强制重排 */
   function setupMiniDrag() {
     const mini = $('#listenMini'); if (!mini || mini.hidden) return;
-    let startX = 0, startY = 0, originL = 0, originT = 0, dragging = false, moved = false, pid = null;
+    let startX = 0, startY = 0, originL = 0, originT = 0;
+    let dragging = false, moved = false, pid = 0;
+    let maxL = 0, maxT = 0, curL = 0, curT = 0, wantL = 0, wantT = 0, raf = 0;
+    let saved = null;
+
+    const paint = () => {
+      raf = 0;
+      if (curL === wantL && curT === wantT) return; /* 位置没动就别碰样式 */
+      curL = wantL; curT = wantT;
+      mini.style.transform = 'translate3d(' + (curL - originL) + 'px,' + (curT - originT) + 'px,0)';
+    };
+    /* 收尾时把最后一帧补上，否则松手会少走几个像素、看着像「粘」了一下 */
+    const flush = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } paint(); };
+
     const onDown = (e) => {
       if (e.target.closest('.lm-close') || e.target.closest('.lm-play')) return; /* 按钮各自处理 */
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      dragging = true; moved = false; pid = e.pointerId;
       const r = mini.getBoundingClientRect();
-      if (mini.style.left === '' || mini.style.right !== 'auto') {
-        mini.style.left = r.left + 'px'; mini.style.top = r.top + 'px';
-        mini.style.right = 'auto'; mini.style.bottom = 'auto';
-      }
-      originL = parseFloat(mini.style.left) || 0;
-      originT = parseFloat(mini.style.top) || 0;
+      saved = { left: mini.style.left, top: mini.style.top, right: mini.style.right, bottom: mini.style.bottom };
+      dragging = true; moved = false; pid = e.pointerId;
+      /* 先把 right/bottom 定位换成 left/top，拖动期间只用 transform 推着走 */
+      mini.style.left = r.left + 'px'; mini.style.top = r.top + 'px';
+      mini.style.right = 'auto'; mini.style.bottom = 'auto';
+      mini.style.transform = 'translate3d(0,0,0)';
+      originL = curL = wantL = r.left;
+      originT = curT = wantT = r.top;
+      maxL = Math.max(4, window.innerWidth - r.width - 4);
+      maxT = Math.max(4, window.innerHeight - r.height - 4);
       startX = e.clientX; startY = e.clientY;
-      try { mini.setPointerCapture(pid); } catch (_) {}
+      listen.dragging = true;
       mini.classList.add('dragging');
+      try { mini.setPointerCapture(pid); } catch (_) {}
     };
+
     const onMove = (e) => {
       if (!dragging) return;
       const dx = e.clientX - startX, dy = e.clientY - startY;
       if (!moved && Math.hypot(dx, dy) > 6) moved = true;
       if (!moved) return;
-      const w = mini.offsetWidth, h = mini.offsetHeight;
-      const nl = Math.max(4, Math.min(window.innerWidth - w - 4, originL + dx));
-      const nt = Math.max(4, Math.min(window.innerHeight - h - 4, originT + dy));
-      mini.style.left = nl + 'px'; mini.style.top = nt + 'px';
+      wantL = Math.max(4, Math.min(maxL, originL + dx));
+      wantT = Math.max(4, Math.min(maxT, originT + dy));
+      if (!raf) raf = requestAnimationFrame(paint); /* 一帧只画一次，高刷屏也不重复干活 */
     };
-    const onUp = (e) => {
+
+    const onUp = () => {
       if (!dragging) return;
       dragging = false;
+      listen.dragging = false;
       try { mini.releasePointerCapture(pid); } catch (_) {}
       mini.classList.remove('dragging');
-      if (moved) {
-        state.listenMiniPos = { left: parseFloat(mini.style.left) || 0, top: parseFloat(mini.style.top) || 0 };
-        save();
-        /* 拖完这次 click 别误触“展开” */
-        mini.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); }, { capture: true, once: true });
+      if (!moved) {
+        /* 只是点了一下：样式原封不动退回去，别把响应式定位改成死坐标 */
+        if (saved) { mini.style.left = saved.left; mini.style.top = saved.top; mini.style.right = saved.right; mini.style.bottom = saved.bottom; }
+        mini.style.transform = '';
+        return;
       }
+      /* 把 transform 的最终位移落回 left/top，同一帧内完成，不会闪 */
+      flush();
+      mini.style.left = curL + 'px';
+      mini.style.top = curT + 'px';
+      mini.style.transform = '';
+      state.listenMiniPos = { left: Math.round(curL), top: Math.round(curT) };
+      save();
+      /* 拖完这次 click 别误触“展开” */
+      mini.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); }, { capture: true, once: true });
     };
+
     mini.addEventListener('pointerdown', onDown);
     mini.addEventListener('pointermove', onMove);
     mini.addEventListener('pointerup', onUp);
