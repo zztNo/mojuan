@@ -193,6 +193,7 @@
       delete state.progress[x];
       delete state.covers[x];
       delete state.bookmarks[x];
+      delete state.annotations[x];
       delete state.bookTags[x];
     }
     state.pinned = state.pinned.filter((p) => !ids.includes(p));
@@ -699,7 +700,7 @@
     }
     const contents = obj.contents || {};
     const n = Object.keys(contents).length;
-    if (!confirm('确定从这份备份恢复吗？\n\n将覆盖当前的藏卷、进度、卷签、封面、设置，以及 ' + n + ' 卷本地卷正文。此操作不可撤销。')) return;
+    if (!confirm('确定从这份备份恢复吗？\n\n将覆盖当前的藏卷、进度、卷签、划线批注、封面、设置，以及 ' + n + ' 卷本地卷正文。此操作不可撤销。')) return;
     try {
       localStorage.setItem(KEY, JSON.stringify(obj.state));
       try {
@@ -1296,10 +1297,29 @@
           </div>`).join('')}
         </div></div>`;
     }
+    const annAll = [];
+    Object.keys(state.annotations || {}).forEach((bid) => {
+      (state.annotations[bid] || []).forEach((a, i) => annAll.push({ bid, a, i }));
+    });
+    if (annAll.length) {
+      annAll.sort((x, y) => (y.a.time || 0) - (x.a.time || 0));
+      html += `<div class="section">${sectionHead('我的笔记 · ' + annAll.length, '', '')}
+        <div class="setting-list">
+          ${annAll.map(({ bid, a, i }) => {
+            const bt = (getBook(bid) || {}).title || '已删除的卷';
+            const frag = a.text.length > 42 ? a.text.slice(0, 42) + '…' : a.text;
+            return `<div class="setting-row">
+              <div class="st" style="cursor:pointer" data-action="open-annotation" data-id="${esc(bid)}" data-val="${i}">《${esc(bt)}》<small>${esc(frag)}${a.note ? ' · 批注：' + esc(a.note) : ''} · 第 ${a.ch} 章</small></div>
+              <button class="btn btn-ghost btn-sm btn-danger" data-action="annotation-del-global" data-id="${esc(bid)}" data-val="${i}">删除</button>
+            </div>`;
+          }).join('')}
+        </div></div>`;
+    }
     html += `<div class="section">${sectionHead('卷档管理', '', '')}
       <div class="setting-list">
-        <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、卷签、封面、设置与本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、卷签、划线批注、封面、设置与本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-backup">${icon('book')}<div class="st">从备份恢复<small>选择之前导出的 .json，会覆盖当前所有数据</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>把所有卷的笔记整理成一个 TXT，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
     html += `<div class="section">${sectionHead('书源', '', '')}
       <div class="setting-list">
@@ -1689,6 +1709,29 @@
     $$('#readerPaper p[data-pi="' + pi + '"], #flipPage p[data-fi="' + (pi + 2) + '"]').forEach((el) => {
       el.innerHTML = highlightHtml(el.textContent, bid, ch, pi);
     });
+  }
+  /* 把散在各卷的划线/批注收成一个 TXT，方便留存或搬到别处 */
+  function exportAnnotations() {
+    const lines = ['墨卷 · 划线与批注', '导出时间：' + new Date().toLocaleString('zh-CN'), ''];
+    let n = 0;
+    Object.keys(state.annotations || {}).forEach((bid) => {
+      const list = annotationList(bid);
+      if (!list.length) return;
+      const b = getBook(bid);
+      lines.push('《' + ((b && b.title) || bid) + '》' + (b && b.author ? ' · ' + b.author : ''));
+      list.slice().sort((x, y) => x.ch - y.ch || x.pi - y.pi || x.time - y.time).forEach((a) => {
+        lines.push('  第 ' + a.ch + ' 章 · 第 ' + (a.pi + 1) + ' 段');
+        lines.push('  原文：' + a.text);
+        if (a.note) lines.push('  批注：' + a.note);
+        lines.push('  ' + new Date(a.time).toLocaleDateString('zh-CN'));
+        lines.push('');
+        n += 1;
+      });
+      lines.push('');
+    });
+    if (!n) { toast('还没有划线或批注'); return; }
+    toast(downloadText('墨卷笔记-' + today() + '.txt', lines.join('\n'))
+      ? '已导出 ' + n + ' 条笔记' : '导出失败，请检查浏览器下载权限');
   }
   let hlDraft = null;
   function hideHlPop() {
@@ -3885,6 +3928,24 @@
         if (!m) { toast('卷签已不存在'); break; }
         ui.flipTargetPage = m.page || 0;
         go('reader/' + id + '/' + m.ch);
+        break;
+      }
+      case 'export-annotations': exportAnnotations(); break;
+      case 'open-annotation': {
+        const a = annotationList(id)[Number(val)];
+        if (!a) { toast('笔记已不存在'); break; }
+        go('reader/' + id + '/' + a.ch);
+        /* focusSearchHit 自带 12 次重试，能等异步分页/正文渲染完再定位到段落 */
+        setTimeout(() => focusSearchHit(a.pi), 320);
+        break;
+      }
+      case 'annotation-del-global': {
+        const list = annotationList(id).slice(), idx = Number(val), d = list[idx];
+        if (!d) break;
+        list.splice(idx, 1);
+        state.annotations[id] = list; save();
+        if (readerRoot.dataset.currentBook === id) refreshHlParas(id, d.ch, d.pi);
+        rerender(); toast('已删除笔记');
         break;
       }
     }
