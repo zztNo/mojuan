@@ -310,7 +310,7 @@
     descOpen: false, nav: 'store', editMode: false, selected: new Set(), longPressed: false,
     coverDraft: null, flipHint: null, flipSwiped: false,
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
-    shelfFilter: 'all', shelfVisibleIds: [], seekDragAt: 0, metaDraft: null,
+    shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], seekDragAt: 0, metaDraft: null,
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
@@ -872,6 +872,8 @@
     }
     html += `<div class="chip-row shelf-filters">${[['all', '全部'], ['want', '想读'], ['reading', '在读'], ['done', '已读']].map(([k, l]) =>
       `<button class="chip ${ui.shelfFilter === k ? 'active' : ''}" data-action="set-shelf-filter" data-val="${k}">${l}</button>`).join('')}</div>`;
+    html += `<div class="chip-row shelf-sorts">${[['recent', '最近阅读'], ['name', '书名'], ['added', '添加顺序']].map(([k, l]) =>
+      `<button class="chip ${ui.shelfSort === k ? 'active' : ''}" data-action="set-shelf-sort" data-val="${k}">${l}</button>`).join('')}</div>`;
     html += `<div class="shelf-toolbar"><h2 class="section-title">架上诸卷</h2>
       <div class="shelf-tools">
         <button class="btn btn-ghost btn-sm shelf-organize" data-action="toggle-edit">${icon('settings', 'ic-sm')} <span>整理</span></button>
@@ -883,6 +885,8 @@
     let order = shelf.slice().sort((a, b) => {
       const pa = state.pinned.includes(a.id) ? 1 : 0, pb = state.pinned.includes(b.id) ? 1 : 0;
       if (pa !== pb) return pb - pa;
+      if (ui.shelfSort === 'name') return (getBook(a.id) || {}).title < (getBook(b.id) || {}).title ? -1 : 1;
+      if (ui.shelfSort === 'added') return state.shelf.indexOf(a.id) - state.shelf.indexOf(b.id);
       const ua = (state.progress[a.id] || {}).updated || 0, ub = (state.progress[b.id] || {}).updated || 0;
       return ub - ua;
     });
@@ -1385,14 +1389,14 @@
   let flipState = { pages: [], page: 0, id: null, ch: 0 };
   function flipItems(b, ch) {
     const arr = [
-      { text: b.title + ' · ' + b.author, type: 'no' },
-      { text: chapterList(b)[ch - 1].title, type: 'h1' }
+      { text: b.title + ' · ' + b.author, type: 'no', idx: 0 },
+      { text: chapterList(b)[ch - 1].title, type: 'h1', idx: 1 }
     ];
-    paragraphs(b, ch - 1).forEach((t) => arr.push({ text: t, type: t.indexOf('（本章完') === 0 ? 'end' : 'p' }));
+    paragraphs(b, ch - 1).forEach((t) => arr.push({ text: t, type: t.indexOf('（本章完') === 0 ? 'end' : 'p', idx: arr.length }));
     /* 校勘记单独占末尾一行入口，点开在面板里看：翻页模式下没法就地展开，
        硬塞在正文里又会挤掉一整页的字 */
     const notes = chapterNotes(b, ch - 1);
-    if (notes.length) arr.push({ text: '注释 · ' + notes.length + ' 条', type: 'notes' });
+    if (notes.length) arr.push({ text: '注释 · ' + notes.length + ' 条', type: 'notes', idx: arr.length });
     return arr;
   }
   function paginate(items, W, H) {
@@ -1436,20 +1440,20 @@
       let rest = it.text, first = true;
       const h = measure(it.type, rest, it.type === 'p');
       if (h <= H - used) {
-        cur.push({ text: rest, type: it.type, indent: it.type === 'p' });
+        cur.push({ text: rest, type: it.type, indent: it.type === 'p', idx: it.idx });
         used += h;
         continue;
       }
       if (h <= H) {
         flush();
-        cur.push({ text: rest, type: it.type, indent: it.type === 'p' });
+        cur.push({ text: rest, type: it.type, indent: it.type === 'p', idx: it.idx });
         used = h;
         continue;
       }
       /* 注释入口就一行：实在放不下就整行挪到下一页，别按字数腰斩 */
       if (it.type !== 'p' && it.type !== 'end') {
         flush();
-        cur.push({ text: rest, type: it.type, indent: false });
+        cur.push({ text: rest, type: it.type, indent: false, idx: it.idx });
         used = h;
         continue;
       }
@@ -1465,7 +1469,7 @@
         }
         if (!best) best = Math.min(rest.length, 20);
         const chunk = rest.slice(0, best);
-        cur.push({ text: chunk, type: 'p', indent: first });
+        cur.push({ text: chunk, type: 'p', indent: first, idx: it.idx });
         used += measure('p', chunk, first);
         rest = rest.slice(best);
         first = false;
@@ -1480,10 +1484,10 @@
     const fp = $('#flipPage'); if (!fp || !flipState.pages.length) return;
     fp.className = 'flip-page';
     fp.innerHTML = flipState.pages[flipState.page].map((it) => {
-      if (it.type === 'no') return `<div class="reader-chapter-no">${esc(it.text)}</div>`;
-      if (it.type === 'h1') return `<h1>${esc(it.text)}</h1>`;
-      if (it.type === 'notes') return `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} ${esc(it.text)}</button>`;
-      return `<p class="${it.type === 'end' ? 'end-note' : ''}" style="${it.indent ? '' : 'text-indent:0'}">${esc(it.text)}</p>`;
+      if (it.type === 'no') return `<div class="reader-chapter-no" data-fi="${it.idx}">${esc(it.text)}</div>`;
+      if (it.type === 'h1') return `<h1 data-fi="${it.idx}">${esc(it.text)}</h1>`;
+      if (it.type === 'notes') return `<button class="ch-notes-entry" data-action="open-notes" data-fi="${it.idx}">${icon('list', 'ic-sm')} ${esc(it.text)}</button>`;
+      return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${esc(it.text)}</p>`;
     }).join('');
     void fp.offsetWidth;
     if (dir && state.settings.flipAnim !== 'none') fp.classList.add('anim-' + state.settings.flipAnim + '-' + dir);
@@ -1912,8 +1916,8 @@
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.playbackState = listen.playing ? 'playing' : 'paused'; } catch (e) { /* 忽略 */ }
     }
-    /* 边听边读时把正文滚到当前段，眼睛跟得上耳朵 */
-    if (!listen.expanded) listenScrollToPara();
+    /* 边听边读：翻页模式自动翻到朗读段所在页；滚动模式收起时才滚动跟随 */
+    listenFollowPara();
   }
   let lastFollow = 0, lastLP = null;
   /* 听书时尽量不让设备锁屏熄火：WakeLock 比静音音轨保活更优雅，不支持的浏览器自动跳过，
@@ -1946,6 +1950,32 @@
       lastFollow = Date.now();
       target.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
+  }
+  /* 翻页模式听书跟随：当前朗读段落不在可视页时，自动翻到那一页并高亮。
+     翻页没有手动滚动条，必须靠翻页把「眼睛的落点」带过去——否则只能干听。 */
+  function listenFlipFollow() {
+    const b = getBook(listen.bookId); if (!b) return;
+    if (state.settings.pageMode !== 'flip' || !$('#reader') || !flipState.pages.length) return;
+    if (flipState.id !== b.id || flipState.ch !== listen.ch) return;
+    /* 用「正在朗读的这句」所属段落，比 paraIndex 更准：Windows SAPI 不触发 onboundary 时 paraIndex 会滞后一句 */
+    const s = listen.sents[listen.sentIndex];
+    const targetIdx = (s ? s.para : listen.paraIndex) + 1; // parts[0]=标题→h1(idx1)，段j→flipItems idx(2+j)=para+1
+    let page = -1;
+    for (let p = 0; p < flipState.pages.length; p++) {
+      if (flipState.pages[p].some((it) => it.idx === targetIdx)) { page = p; break; }
+    }
+    if (page < 0) return;
+    if (page !== flipState.page) { flipState.page = page; renderFlipPage(); }
+    const fp = $('#flipPage'); if (!fp) return;
+    fp.querySelectorAll('.lp-active').forEach((el) => el.classList.remove('lp-active'));
+    fp.querySelectorAll('[data-fi="' + targetIdx + '"]').forEach((el) => el.classList.add('lp-active'));
+  }
+  function listenFollowPara() {
+    const b = getBook(listen.bookId); if (!b) return;
+    if (readerRoot.dataset.currentBook !== b.id) return;
+    if (state.settings.pageMode === 'flip') { listenFlipFollow(); return; }
+    if (listen.expanded) return;
+    listenScrollToPara();
   }
   /* 每句结束把进度落盘（节流），退出后再进来能接着听 */
   function listenCommitProgress() {
@@ -2524,6 +2554,7 @@
     const l = $('#listenRoot'); if (l) l.remove();
     const t = $('#ttsBtn'); if (t) t.classList.remove('tts-on');
     if (lastLP) { try { lastLP.classList.remove('lp-active'); } catch (e) { /* 忽略 */ } lastLP = null; }
+    $$('#flipPage .lp-active').forEach((el) => el.classList.remove('lp-active'));
     listenReleaseWakeLock();
     document.body.style.overflow = listen.prevOverflow || '';
   }
@@ -2886,8 +2917,13 @@
         <button class="${kind === 'catalog' ? 'active' : ''}" data-action="open-panel" data-val="catalog">目录 ${chs.length}</button>
         <button class="${kind === 'bookmark' ? 'active' : ''}" data-action="open-panel" data-val="bookmark">卷签 ${marks.length}</button>
       </div>`;
+      const resume = state.progress[b.id] || {};
+      const resumeCh = resume.ch || 0;
+      const resumeHtml = (resumeCh && resumeCh <= chs.length)
+        ? `<button class="cat-resume" data-action="catalog-goto" data-ch="${resumeCh}">${icon('play', 'ic-sm')} 继续读 · 第 ${resumeCh} 章 ${Math.round((resume.pct || 0) * 100)}%</button>`
+        : '';
       const content = kind === 'catalog'
-        ? `<div class="cat-search">${icon('search', 'ic-sm')}<input id="catalogSearch" placeholder="搜章节名或序号" autocomplete="off"></div>
+        ? `${resumeHtml}<div class="cat-search">${icon('search', 'ic-sm')}<input id="catalogSearch" placeholder="搜章节名，或直接输入第几章" autocomplete="off"></div>
           <ul class="catalog-list" id="catalogList">${chs.map((c, i) =>
             `<li class="${i + 1 === cur ? 'active' : ''}" data-action="catalog-goto" data-ch="${i + 1}">${esc(c.title)}<small>${i + 1}</small></li>`).join('')}</ul>
           <div class="cat-nav">
@@ -3214,6 +3250,7 @@
         rerender(); break;
       }
       case 'set-shelf-filter': ui.shelfFilter = val; rerender(); break;
+      case 'set-shelf-sort': ui.shelfSort = val; rerender(); break;
       case 'open-shelf-actions': openShelfActions(); break;
       case 'close-shelf-actions': closeShelfActions(); break;
       case 'bulk-pin': {
@@ -3616,7 +3653,12 @@
       const el = e.target;
       catalogSearchTimer = setTimeout(() => {
         const q = el.value.trim().toLowerCase();
-        $$('#catalogList li').forEach((li) => { li.hidden = !!q && !li.textContent.toLowerCase().includes(q); });
+        const num = parseInt(q, 10);
+        $$('#catalogList li').forEach((li) => {
+          const liNum = parseInt(li.dataset.ch, 10);
+          const hit = !q || li.textContent.toLowerCase().includes(q) || (!isNaN(num) && liNum === num);
+          li.hidden = !hit;
+        });
       }, 120);
     }
   });

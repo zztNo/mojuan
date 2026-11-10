@@ -506,12 +506,18 @@ img, svg { display: block; }
 .reader-paper p { margin: 0 0 1.1em; text-indent: 2em; text-align: justify; text-wrap: pretty; }
 .reader-paper .end-note { text-align: center; text-indent: 0; color: var(--reader-sub); font-size: .72em; margin-top: 42px; letter-spacing: .1em; }
 /* 听书时高亮当前朗读的段落：左侧朱砂竖线 + 淡暖底，眼睛跟得上耳朵 */
-.reader-paper p.lp-active {
+.reader-paper p.lp-active, .flip-page p.lp-active {
   background: linear-gradient(90deg, var(--cinnabar-soft), transparent 70%);
   box-shadow: inset 3px 0 0 var(--cinnabar);
   border-radius: 3px;
   transition: background .3s ease;
 }
+/* 目录面板里的「继续读」一键跳到上次章节 */
+.cat-resume { display: flex; align-items: center; gap: 6px; width: 100%; margin-bottom: 10px; padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--cinnabar) 38%, transparent);
+  background: color-mix(in srgb, var(--cinnabar) 9%, transparent); color: var(--cinnabar);
+  border-radius: 10px; font-size: 13px; font-family: var(--font-ui); cursor: pointer; }
+.cat-resume:hover { background: color-mix(in srgb, var(--cinnabar) 16%, transparent); }
 .reader-chapter-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 44px; padding-top: 22px; border-top: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent); font-family: var(--font-ui); font-size: 13px; }
 .reader-chapter-nav button { color: var(--reader-ink); display: flex; align-items: center; gap: 6px; opacity: .8; }
 .reader-chapter-nav button:hover { opacity: 1; color: var(--cinnabar); }
