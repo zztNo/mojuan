@@ -1,0 +1,33 @@
+{
+  "name": "mojuan",
+  "version": "1.1.0",
+  "description": "墨卷 · 中式水墨风公版书阅读器（Windows 桌面端）",
+  "main": "main.js",
+  "author": "墨卷",
+  "private": true,
+  "scripts": {
+    "copy-offline": "node -e \"require('fs').copyFileSync('../mojuan-offline.html','mojuan-offline.html')\"",
+    "dist": "npm run copy-offline && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.mojuan.reader",
+    "productName": "墨卷",
+    "copyright": "MIT License",
+    "files": [
+      "main.js",
+      "mojuan-offline.html",
+      "icon.ico"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico"
+    },
+    "portable": {
+      "artifactName": "墨卷-${version}-portable.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  }
+}
