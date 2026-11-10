@@ -316,6 +316,7 @@
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
     shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
     noteSearch: '', noteBook: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
+    noteMulti: false, notePicked: new Set(),
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
@@ -1355,19 +1356,29 @@
       annAll.sort((x, y) => (y.a.time || 0) - (x.a.time || 0));
       const noteBooks = [];
       annAll.forEach(({ bid }) => { if (!noteBooks.includes(bid)) noteBooks.push(bid); });
-      html += `<div class="section">${sectionHead('我的笔记 · ' + annAll.length, '', '')}
+      html += `<div class="section">${sectionHead('我的笔记 · ' + annAll.length, ui.noteMulti ? '完成' : '整理', 'toggle-note-multi')}
         <div class="shelf-search">${icon('search', 'ic-sm')}<input id="noteSearch" placeholder="搜原文 / 批注 / 书名" value="${esc(ui.noteSearch || '')}" autocomplete="off">
           <select id="noteBookFilter" class="note-book-filter" aria-label="按卷筛选">
             <option value="">全部卷</option>
             ${noteBooks.map((bid) => `<option value="${esc(bid)}" ${ui.noteBook === bid ? 'selected' : ''}>《${esc((getBook(bid) || {}).title || bid)}》</option>`).join('')}
           </select>
           <button class="shelf-search-clear" data-action="clear-note-search" title="清空" ${ui.noteSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>
+        ${ui.noteMulti ? `<div class="note-multi-bar">
+          <button class="btn btn-ghost btn-sm" data-action="note-pick-all" id="notePickAll">全选</button>
+          <span class="note-pick-count" id="notePickCount">已选 ${ui.notePicked.size} 条</span>
+          <span class="note-multi-colors" title="给选中笔记改色">${[['red', '朱砂'], ['jade', '青竹'], ['gold', '泥金']].map(([k, l]) =>
+            `<button class="hl-dot hl-${k}" data-action="note-bulk-color" data-val="${k}" title="改为${l}" aria-label="改为${l}"></button>`).join('')}</span>
+          <button class="btn btn-ghost btn-sm btn-danger" data-action="note-bulk-del">${icon('trash', 'ic-sm')} 删除</button>
+        </div>` : ''}
         <div class="setting-list">
           ${annAll.map(({ bid, a, i }) => {
             const bt = (getBook(bid) || {}).title || '已删除的卷';
             const frag = a.text.length > 42 ? a.text.slice(0, 42) + '…' : a.text;
             const hay = (bt + ' ' + a.text + ' ' + (a.note || '') + ' 第' + a.ch + '章').toLowerCase();
-            return `<div class="setting-row" data-note-item="1" data-note-book="${esc(bid)}" data-note-search="${esc(hay)}">
+            const key = bid + ':' + i;
+            const on = ui.notePicked.has(key);
+            return `<div class="setting-row${ui.noteMulti ? ' note-multi' : ''}${on ? ' picked' : ''}" data-note-item="1" data-note-book="${esc(bid)}" data-note-key="${esc(key)}" data-note-search="${esc(hay)}">
+              ${ui.noteMulti ? `<span class="note-pick ${on ? 'on' : ''}">${on ? icon('check', 'ic-sm') : ''}</span>` : ''}
               <div class="st" style="cursor:pointer" data-action="open-annotation" data-id="${esc(bid)}" data-val="${i}">《${esc(bt)}》<small><i class="ann-dot hl-${esc(a.color || 'red')}"></i>${esc(frag)}${a.note ? ' · 批注：' + esc(a.note) : ''} · 第 ${a.ch} 章</small></div>
               <button class="btn btn-ghost btn-sm btn-danger" data-action="annotation-del-global" data-id="${esc(bid)}" data-val="${i}">删除</button>
             </div>`;
@@ -1491,6 +1502,16 @@
         <div class="hl-note" id="hlNote" hidden>
           <textarea id="hlNoteInput" rows="2" placeholder="写点想法（可留空）"></textarea>
           <button class="hl-btn primary" data-action="hl-save-note">保存</button>
+        </div>
+      </div>
+      <div class="hl-pop hl-edit" id="hlEdit" hidden>
+        <span class="hl-colors" id="hlEditColors">${[['red', '朱砂'], ['jade', '青竹'], ['gold', '泥金']].map(([k, l]) =>
+          `<button class="hl-dot hl-${k}" data-action="hl-edit-color" data-val="${k}" title="改为${l}" aria-label="改为${l}"></button>`).join('')}</span>
+        <button class="hl-btn" data-action="hl-edit-note">批注</button>
+        <button class="hl-btn danger" data-action="hl-edit-del">删除</button>
+        <div class="hl-note" id="hlEditNote" hidden>
+          <textarea id="hlEditNoteInput" rows="2" placeholder="写点想法"></textarea>
+          <button class="hl-btn primary" data-action="hl-edit-note-save">保存</button>
         </div>
       </div>
     </div>`;
@@ -1792,6 +1813,77 @@
     });
     const nm = $('#noteNoMatch'); if (nm) nm.hidden = shown > 0;
     const clr = $('.shelf-search-clear'); if (clr) clr.hidden = !ui.noteSearch;
+    if (ui.noteMulti) syncNotePickBar();
+  }
+  /* 批量整理：勾选状态直接改 DOM，不整页重渲染，输入框焦点和滚动位置都不动 */
+  function noteKeyOf(bid, idx) { return bid + ':' + idx; }
+  function splitNoteKey(k) {
+    const p = k.lastIndexOf(':');
+    return [k.slice(0, p), Number(k.slice(p + 1))];
+  }
+  function syncNotePickBar() {
+    const c = $('#notePickCount'); if (c) c.textContent = '已选 ' + ui.notePicked.size + ' 条';
+    const all = $('#notePickAll');
+    if (all) {
+      const vis = $$('[data-note-item]').filter((el) => !el.hidden);
+      all.textContent = vis.length && vis.every((el) => ui.notePicked.has(el.dataset.noteKey)) ? '取消全选' : '全选';
+    }
+  }
+  function paintNotePick(el) {
+    const on = ui.notePicked.has(el.dataset.noteKey);
+    el.classList.toggle('picked', on);
+    const box = el.querySelector('.note-pick');
+    if (box) { box.classList.toggle('on', on); box.innerHTML = on ? icon('check', 'ic-sm') : ''; }
+    return on;
+  }
+  function toggleNotePick(el) {
+    const k = el.dataset.noteKey;
+    if (ui.notePicked.has(k)) ui.notePicked.delete(k); else ui.notePicked.add(k);
+    paintNotePick(el);
+    syncNotePickBar();
+  }
+  function applyNoteBulkColor(col) {
+    if (!ui.notePicked.size) { toast('先勾选要改色的笔记'); return; }
+    const touched = [];
+    ui.notePicked.forEach((k) => {
+      const [bid, idx] = splitNoteKey(k);
+      const a = annotationList(bid)[idx];
+      if (a) { a.color = col; touched.push({ bid, a }); }
+    });
+    if (!touched.length) { toast('这些笔记已经不在了'); return; }
+    save();
+    $$('[data-note-item]').forEach((el) => {
+      if (!ui.notePicked.has(el.dataset.noteKey)) return;
+      const d = el.querySelector('.ann-dot'); if (d) d.className = 'ann-dot hl-' + col;
+    });
+    /* 笔记面板是开在阅读器里的，正文里的划线颜色要同步刷一下 */
+    const cur = readerRoot.dataset.currentBook;
+    if (cur) touched.filter((t) => t.bid === cur).forEach((t) => refreshHlParas(cur, t.a.ch, t.a.pi));
+    toast('已改为' + NOTE_COLORS[col] + ' · ' + touched.length + ' 条');
+  }
+  function applyNoteBulkDelete() {
+    if (!ui.notePicked.size) { toast('先勾选要删除的笔记'); return; }
+    const n = ui.notePicked.size;
+    if (!confirm('删除选中的 ' + n + ' 条笔记？此操作不可撤销。')) return;
+    const byBook = new Map();
+    ui.notePicked.forEach((k) => {
+      const [bid, idx] = splitNoteKey(k);
+      if (!byBook.has(bid)) byBook.set(bid, []);
+      byBook.get(bid).push(idx);
+    });
+    let curTouched = [];
+    byBook.forEach((idxs, bid) => {
+      const list = annotationList(bid).slice();
+      idxs.sort((x, y) => y - x).forEach((i) => { if (list[i]) curTouched.push({ bid, a: list[i] }); list.splice(i, 1); });
+      state.annotations[bid] = list;
+    });
+    save();
+    ui.notePicked.clear();
+    ui.noteMulti = false;
+    const cur = readerRoot.dataset.currentBook;
+    if (cur) curTouched.filter((t) => t.bid === cur).forEach((t) => refreshHlParas(cur, t.a.ch, t.a.pi));
+    rerender();
+    toast('已删除 ' + n + ' 条笔记');
   }
   /* 把散在各卷的划线/批注收成一个 TXT，方便留存或搬到别处 */
   function exportAnnotations() {
@@ -1822,6 +1914,48 @@
     const n = $('#hlNote'); if (n) n.hidden = true;
     hlDraft = null;
   }
+  /* 点正文里已有的划线：就地改色、改批注、删除，不必绕去笔记列表 */
+  let hlEditTarget = null;
+  function hideHlEdit() {
+    const p = $('#hlEdit'); if (p) p.hidden = true;
+    const n = $('#hlEditNote'); if (n) n.hidden = true;
+    hlEditTarget = null;
+  }
+  function openHlEdit(markEl) {
+    const bid = readerRoot.dataset.currentBook; if (!bid || !markEl) return;
+    const para = markEl.closest('#readerPaper p[data-pi], #flipPage p[data-fi]');
+    if (!para) return;
+    const pi = para.dataset.pi != null ? Number(para.dataset.pi) : Number(para.dataset.fi) - 2;
+    const ch = Number(readerRoot.dataset.currentCh) || 1;
+    const list = annotationList(bid);
+    const idx = list.findIndex((a) => a.ch === ch && a.pi === pi && a.text === markEl.textContent);
+    if (idx < 0) return;
+    const pop = $('#hlEdit'); if (!pop) return;
+    hideHlPop();
+    hlEditTarget = { bid, ch, pi, idx };
+    const col = list[idx].color || 'red';
+    $$('#hlEditColors .hl-dot').forEach((b) => b.classList.toggle('active', b.dataset.val === col));
+    const ta = $('#hlEditNoteInput'); if (ta) ta.value = list[idx].note || '';
+    const n = $('#hlEditNote'); if (n) n.hidden = true;
+    const r = markEl.getBoundingClientRect();
+    const below = r.bottom + 132 < window.innerHeight;
+    pop.dataset.below = below ? '1' : '0';
+    pop.hidden = false;
+    pop.style.left = Math.max(140, Math.min(window.innerWidth - 140, r.left + r.width / 2)) + 'px';
+    pop.style.top = (below ? r.bottom + 8 : Math.max(10, r.top - 8)) + 'px';
+  }
+  /* 目标索引可能因为中间删过别的笔记而错位，落笔前先核对一遍 */
+  function hlEditMutate(mut) {
+    if (!hlEditTarget) return null;
+    const t = hlEditTarget;
+    const list = annotationList(t.bid);
+    const a = list[t.idx];
+    if (!a || a.ch !== t.ch || a.pi !== t.pi) { hideHlEdit(); return null; }
+    mut(a, list);
+    save();
+    refreshHlParas(t.bid, a.ch, a.pi);
+    return a;
+  }
   const hlParaOf = (n) => {
     const el = n && (n.nodeType === 3 ? n.parentElement : n);
     return el && el.closest ? el.closest('#readerPaper p[data-pi], #flipPage p[data-fi]') : null;
@@ -1841,6 +1975,7 @@
     if (isNaN(pi) || pi < 0) return;
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
     hlDraft = { bid: b.id, ch: Number(readerRoot.dataset.currentCh) || 1, pi, text };
+    hideHlEdit();
     const pop = $('#hlPop'), note = $('#hlNote'); if (!pop) return;
     const r = sel.getRangeAt(0).getBoundingClientRect();
     const below = r.bottom + 120 < window.innerHeight;
@@ -3142,6 +3277,7 @@
   }
   function openPanel(kind) {
     hideHlPop();
+    hideHlEdit();
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
     mask.hidden = false; drawer.hidden = true;
@@ -3228,6 +3364,7 @@
     if (into && !into.hidden) { into.setAttribute('tabindex', '-1'); into.focus({ preventScroll: true }); }
   }
   function closePanel() {
+    hideHlEdit();
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
     const hadFocus = document.activeElement && (document.activeElement === panel || document.activeElement === drawer
       || (panel && panel.contains(document.activeElement)) || (drawer && drawer.contains(document.activeElement)));
@@ -3238,6 +3375,7 @@
     if (hadFocus) { const rd = $('#reader'); if (rd) rd.focus({ preventScroll: true }); }
   }
   function switchChapter(id, ch, pct) {
+    hideHlEdit();
     const b = getBook(id);
     ch = Math.max(1, Math.min(chapterList(b).length, ch));
     state.progress[id] = { ch, pct: pct || 0, updated: Date.now() };
@@ -3450,12 +3588,19 @@
   /* ---------- 事件 ---------- */
   document.addEventListener('click', (e) => {
     if (ui.longPressed) { ui.longPressed = false; e.preventDefault(); return; }
+    /* 整理模式下行内任意位置都算勾选，别让点标题把面板关掉 */
+    if (ui.noteMulti) {
+      const row = e.target.closest('[data-note-item]');
+      if (row) { e.preventDefault(); toggleNotePick(row); return; }
+    }
     const goEl = e.target.closest('[data-go]');
     if (goEl) { go(goEl.dataset.go); return; }
     const el = e.target.closest('[data-action]');
     if (!el) {
       /* 刚划完字时点正文只收起工具条，别顺手翻页 */
       if ($('#hlPop') && !$('#hlPop').hidden) { hideHlPop(); return; }
+      /* 点已有的划线是「编辑它」，别把当页翻过去、也别收工具条 */
+      if (e.target.closest('mark.hl-mark')) return;
       if (e.target.closest('#readerBody') && !e.target.closest('button')) {
         if (ui.flipSwiped) { ui.flipSwiped = false; return; }
         if (state.settings.pageMode === 'flip' && $('#reader')) {
@@ -3992,6 +4137,56 @@
         break;
       }
       case 'hl-save-note': saveHl((($('#hlNoteInput') || {}).value || '').trim()); break;
+      case 'hl-edit-color': {
+        const col = val === 'jade' || val === 'gold' ? val : 'red';
+        if (!hlEditMutate((a) => { a.color = col; })) break;
+        $$('#hlEditColors .hl-dot').forEach((b) => b.classList.toggle('active', b.dataset.val === col));
+        toast('已改为' + NOTE_COLORS[col]);
+        break;
+      }
+      case 'hl-edit-note': {
+        const n = $('#hlEditNote'), i = $('#hlEditNoteInput');
+        if (n) n.hidden = false;
+        if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+        break;
+      }
+      case 'hl-edit-note-save': {
+        const v = (($('#hlEditNoteInput') || {}).value || '').trim();
+        if (!hlEditMutate((a) => { a.note = v; })) break;
+        hideHlEdit();
+        toast(v ? '批注已保存' : '批注已清空');
+        break;
+      }
+      case 'hl-edit-del': {
+        if (!hlEditTarget) break;
+        const t = hlEditTarget;
+        const list = annotationList(t.bid), a = list[t.idx];
+        if (!a) { hideHlEdit(); break; }
+        list.splice(t.idx, 1); state.annotations[t.bid] = list; save();
+        refreshHlParas(t.bid, a.ch, a.pi);
+        hideHlEdit();
+        toast('已删除这条笔记');
+        break;
+      }
+      case 'toggle-note-multi': {
+        ui.noteMulti = !ui.noteMulti;
+        if (!ui.noteMulti) ui.notePicked.clear();
+        rerender();
+        break;
+      }
+      case 'note-pick-all': {
+        const vis = $$('[data-note-item]').filter((el) => !el.hidden);
+        const allOn = vis.length && vis.every((el) => ui.notePicked.has(el.dataset.noteKey));
+        vis.forEach((el) => {
+          const k = el.dataset.noteKey;
+          if (allOn) ui.notePicked.delete(k); else ui.notePicked.add(k);
+          paintNotePick(el);
+        });
+        syncNotePickBar();
+        break;
+      }
+      case 'note-bulk-color': applyNoteBulkColor(val === 'jade' || val === 'gold' ? val : 'red'); break;
+      case 'note-bulk-del': applyNoteBulkDelete(); break;
       case 'annotation-goto': {
         const b = getBook(readerRoot.dataset.currentBook);
         const a = b && annotationList(b.id)[Number(val)];
@@ -4097,10 +4292,15 @@
   document.addEventListener('click', (e) => { if (e.target.id === 'readerMask') { closePanel(); closeReaderSearch(); } });
   /* 划完一段正文才弹「划线 / 批注」；点工具条内部不重新检测，免得把刚选中的清掉 */
   document.addEventListener('pointerup', (e) => {
-    if (e.target && e.target.closest && e.target.closest('#hlPop')) return;
+    if (e.target && e.target.closest && (e.target.closest('#hlPop') || e.target.closest('#hlEdit'))) return;
+    const mark = e.target && e.target.closest ? e.target.closest('#readerPaper mark.hl-mark, #flipPage mark.hl-mark') : null;
     setTimeout(() => {
       const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) { hideHlPop(); return; }
+      if (!sel || sel.isCollapsed) {
+        hideHlPop();
+        if (mark) openHlEdit(mark); else hideHlEdit();
+        return;
+      }
       const pop = $('#hlPop'), txt = String(sel).trim();
       /* 选区没变就别重弹：用户正在批注框里打字，重渲会把输入框收掉 */
       if (pop && !pop.hidden && hlDraft && hlDraft.text === txt) return;
@@ -4168,6 +4368,8 @@
         e.preventDefault(); ni.value = ''; ui.noteSearch = ''; applyNoteFilter(); return;
       }
       if ($('#hlPop') && !$('#hlPop').hidden) { hideHlPop(); return; }
+      if ($('#hlEdit') && !$('#hlEdit').hidden) { hideHlEdit(); return; }
+      if (ui.noteMulti) { ui.noteMulti = false; ui.notePicked.clear(); rerender(); return; }
       if (ui.coverDraft) { closeCoverEditor(); return; }
       if (ui.metaDraft) { closeMetaEditor(); return; }
       if ($('#shelfMenu')) { closeShelfMenu(); return; }

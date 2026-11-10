@@ -1077,6 +1077,33 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .ann-dot.hl-red { background: var(--cinnabar); }
 .ann-dot.hl-jade { background: var(--jade); }
 .ann-dot.hl-gold { background: var(--gold); }
+/* 点已有划线弹出的就地编辑条 */
+.hl-btn.danger { color: var(--cinnabar); border-color: color-mix(in srgb, var(--cinnabar) 40%, transparent); }
+.hl-btn.danger:hover { background: color-mix(in srgb, var(--cinnabar) 10%, transparent); }
+.hl-edit { gap: 6px; }
+.hl-edit .hl-note { left: auto; right: 0; }
+/* ---------- 笔记批量整理 ---------- */
+.note-multi-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 8px 0 4px; padding: 8px 10px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.note-pick-count { font-size: 12px; color: var(--ink-2); margin-right: auto; }
+.note-multi-colors { display: flex; align-items: center; gap: 6px; }
+.note-multi-colors .hl-dot { width: 16px; height: 16px; }
+.setting-row.note-multi { cursor: pointer; }
+.setting-row.note-multi .ann-item { pointer-events: none; }
+.setting-row.note-multi .btn-danger { display: none; }
+.setting-row.picked { background: color-mix(in srgb, var(--cinnabar) 7%, transparent); }
+.note-pick {
+  flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; margin-right: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 26%, transparent); color: #fff;
+}
+.note-pick.on { background: var(--cinnabar); border-color: var(--cinnabar); }
+.note-pick .ic { width: 12px; height: 12px; }
+.note-pick.on .ic { color: #fff; }
 .note-book-filter { max-width: 132px; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; }
 /* ---------- 书城搜索命中高亮 ---------- */
 .q-hit { background: color-mix(in srgb, var(--cinnabar) 20%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
