@@ -1017,6 +1017,16 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 
 /* ---------- 书架整理：状态标签与批量操作面板 ---------- */
 .shelf-filters { margin-bottom: 14px; }
+/* ---------- 藏卷搜索 ---------- */
+.shelf-search {
+  display: flex; align-items: center; gap: 8px; margin: 10px 0 16px;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--paper-2); color: var(--ink-3);
+}
+.shelf-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--ink); font: inherit; font-size: 13.5px; }
+.shelf-search input::placeholder { color: var(--ink-3); }
+.shelf-search .shelf-search-clear { display: flex; padding: 2px; border: 0; background: none; color: var(--ink-3); cursor: pointer; }
+.shelf-search .shelf-search-clear:hover { color: var(--cinnabar); }
 .mini-tag {
   margin-left: 5px; padding: 0 4px; border-radius: 4px; white-space: nowrap;
   font-size: 10px; color: var(--jade); border: 1px solid var(--line);

@@ -310,7 +310,7 @@
     descOpen: false, nav: 'store', editMode: false, selected: new Set(), longPressed: false,
     coverDraft: null, flipHint: null, flipSwiped: false,
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
-    shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], seekDragAt: 0, metaDraft: null,
+    shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '', seekDragAt: 0, metaDraft: null,
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
@@ -784,7 +784,7 @@
       ? `<div class="pick-box ${picked ? 'on' : ''}" data-action="pick-book" data-id="${b.id}">${picked ? icon('check', 'ic-sm') : ''}</div>`
       : '';
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
-    return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''}>
+    return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}">
       <div style="position:relative">${coverHtml(b)}${badge}${pick}</div>
       <div class="book-name">${b.title}</div>
       <div class="book-meta"><span class="bm-text">${b.author} · ${b.category}</span>${miniTags(b)}</div>
@@ -798,7 +798,7 @@
       ? `<div class="pick-box row ${picked ? 'on' : ''}" data-action="pick-book" data-id="${b.id}">${picked ? icon('check', 'ic-sm') : ''}</div>`
       : '';
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
-    return `<div class="book-row ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''}>
+    return `<div class="book-row ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}">
       ${pick}
       ${opts.rank ? `<div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>` : ''}
       <div style="width:62px;flex:none">${coverHtml(b)}</div>
@@ -874,6 +874,7 @@
       `<button class="chip ${ui.shelfFilter === k ? 'active' : ''}" data-action="set-shelf-filter" data-val="${k}">${l}</button>`).join('')}</div>`;
     html += `<div class="chip-row shelf-sorts">${[['recent', '最近阅读'], ['name', '书名'], ['added', '添加顺序']].map(([k, l]) =>
       `<button class="chip ${ui.shelfSort === k ? 'active' : ''}" data-action="set-shelf-sort" data-val="${k}">${l}</button>`).join('')}</div>`;
+    html += `<div class="shelf-search">${icon('search', 'ic-sm')}<input id="shelfSearch" placeholder="搜书名 / 作者" value="${esc(ui.shelfSearch || '')}" autocomplete="off"><button class="shelf-search-clear" data-action="clear-shelf-search" title="清空" ${ui.shelfSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>`;
     html += `<div class="shelf-toolbar"><h2 class="section-title">架上诸卷</h2>
       <div class="shelf-tools">
         <button class="btn btn-ghost btn-sm shelf-organize" data-action="toggle-edit">${icon('settings', 'ic-sm')} <span>整理</span></button>
@@ -891,6 +892,8 @@
       return ub - ua;
     });
     if (ui.shelfFilter !== 'all') order = order.filter((b) => state.bookTags[b.id] === ui.shelfFilter);
+    /* 搜索不在这里裁 order：重渲染若按关键词删卡片，之后删字放宽搜索就再也恢复不了。
+       统一由 applyShelfSearch 切 hidden，DOM 里始终保留当前分组的全部卡片。 */
     ui.shelfVisibleIds = order.map((b) => b.id);
     if (!order.length) {
       html += `<div class="empty">${icon('search')}<p>这个分组还空着，长按卷册可批量理卷</p>
@@ -902,6 +905,7 @@
             badge: b.status === '连载' && (state.progress[b.id] || {}).updated ? '有更新' : ''
           })).join('')}</div>`
         : `<div class="book-list">${order.map((b, i) => bookRow(b, i, { shelf: true, edit: ui.editMode })).join('')}</div>`;
+      html += `<div id="shelfNoMatch" class="empty" hidden>${icon('search')}<p>没找到匹配的卷</p><button class="btn btn-ghost" data-action="clear-shelf-search">清空搜索</button></div>`;
     }
     if (ui.editMode) {
       const n = ui.selected.size;
@@ -951,6 +955,24 @@
     return head('书肆', 'INK MARKET', desc) + tabs +
       (tab === 'category' ? pageCategory() : tab === 'rank' ? pageRank() : pageStore());
   }
+  /* ---------- 藏卷搜索：直接切 hidden，不重渲染，保住输入焦点与滚动位置 ---------- */
+  let shelfSearchTimer = null;
+  function applyShelfSearch(v) {
+    ui.shelfSearch = v || '';
+    const q = ui.shelfSearch.toLowerCase();
+    const vis = [];
+    $$('[data-shelf-card]').forEach((el) => {
+      const hit = !q || (el.dataset.st || '').includes(q) || (el.dataset.sa || '').includes(q);
+      el.hidden = !hit;
+      if (hit) vis.push(el.dataset.id);
+    });
+    ui.shelfVisibleIds = vis; /* 整理/全选只作用于当前可见的卷 */
+    const empty = $('#shelfNoMatch');
+    if (empty) empty.hidden = vis.length > 0 || !q;
+    const clr = $('.shelf-search-clear');
+    if (clr) clr.hidden = !ui.shelfSearch;
+  }
+
   function pageStore() {
     let html = '';
     html += `<div id="bannerBox">${bannerHtml()}</div>`;
@@ -3135,6 +3157,7 @@
       default: html = storeHtml('home');
     }
     view.innerHTML = html;
+    if (r.name === 'shelf') applyShelfSearch(ui.shelfSearch);
     a11ySweep(view);
     markScrollableRows(view);
     window.scrollTo(0, pendingScroll);
@@ -3345,6 +3368,12 @@
       }
       case 'set-shelf-filter': ui.shelfFilter = val; rerender(); break;
       case 'set-shelf-sort': ui.shelfSort = val; rerender(); break;
+      case 'clear-shelf-search': {
+        const inp = $('#shelfSearch');
+        if (inp) { inp.value = ''; inp.focus(); }
+        applyShelfSearch('');
+        break;
+      }
       case 'open-shelf-actions': openShelfActions(); break;
       case 'close-shelf-actions': closeShelfActions(); break;
       case 'bulk-pin': {
@@ -3744,6 +3773,12 @@
       clearTimeout(searchTimer);
       const v = e.target.value;
       searchTimer = setTimeout(() => renderSearchBody(v), 120);
+    }
+    if (e.target.id === 'shelfSearch') {
+      /* 防抖：停输 120ms 再过滤，避免逐键遍历 83 张卡片 */
+      clearTimeout(shelfSearchTimer);
+      const v = e.target.value;
+      shelfSearchTimer = setTimeout(() => applyShelfSearch(v), 120);
     }
     if (e.target.id === 'catalogSearch') {
       /* 长篇在线书目录上千条，逐键遍历全部 <li> 会卡，轻量防抖：停输 120ms 才过滤 */
