@@ -1333,7 +1333,7 @@
       : `<div class="reader-paper" id="readerPaper">
           <div class="reader-chapter-no">${esc(b.title)} · ${esc(b.author)}</div>
           <h1>${esc(cur.title)}</h1>
-          ${errMsg ? errBlock : paras.map((p) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}">${esc(p)}</p>`).join('')}
+          ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${esc(p)}</p>`).join('')}
           ${notes.length && !errMsg ? `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} 注释 · ${notes.length} 条</button>` : ''}
           <div class="reader-chapter-nav">
             <button data-action="reader-prev" ${ch <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
@@ -1363,6 +1363,7 @@
         <button class="rb-mbtn" data-action="toggle-tts" id="ttsBtn" title="打开听卷界面">${icon('volume')}<span>听卷</span></button>
         <button class="rb-mbtn" data-action="reader-theme-toggle" id="themeBtn" data-on="${night}" title="切换夜墨 / 日光">${icon(night ? 'sun' : 'moon')}<span>${night ? '日间' : '夜间'}</span></button>
         <button class="rb-mbtn" data-action="reader-settings" title="字号与纸张">${icon('settings')}<span>设置</span></button>
+        <button class="rb-mbtn" data-action="reader-search" title="在本书中搜索">${icon('search')}<span>搜索</span></button>
       </div>`;
     return `<div class="reader mode-${flip ? 'flip' : 'scroll'}" id="reader" data-paper="${state.settings.paper}">
       <div class="reader-top" id="readerTop">
@@ -1375,6 +1376,7 @@
       <div class="reader-mask" id="readerMask" hidden></div>
       <div id="readerPanel" hidden></div>
       <div class="catalog-drawer" id="catalogDrawer" hidden></div>
+      <div class="search-drawer" id="searchDrawer" hidden></div>
     </div>`;
   }
   function applyReaderStyle() {
@@ -2973,6 +2975,98 @@
     closePanel();
   }
 
+  /* ---------- 阅读器内文搜索：在本书已载入的章节里找词，点结果跳到命中段落 ---------- */
+  function openReaderSearch() {
+    const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
+    const mask = $('#readerMask'), d = $('#searchDrawer');
+    if (!mask || !d) return;
+    mask.hidden = false; d.hidden = false;
+    const rec = contentCache[b.id];
+    const cached = (rec && rec.chapters ? rec.chapters.filter(Boolean).length : 0);
+    const total = chapterList(b).length;
+    const needNet = b.online && cached < total;
+    d.innerHTML = `<div class="search-head"><span>在《${esc(b.title)}》中检索</span>
+        <button class="icon-btn" data-action="search-close" title="关闭">${icon('close', 'ic-sm')}</button></div>
+      <div class="search-bar">${icon('search', 'ic-sm')}<input id="searchBox" placeholder="输入要找的词句" autocomplete="off" aria-label="本书内搜索"></div>
+      ${needNet ? `<div class="search-hint" id="searchHint">已检索已读过的 ${cached} / ${total} 章 · <button class="linklike" data-action="search-all">联网检索全书</button></div>` : ''}
+      <div class="search-results" id="searchResults"><div class="search-empty">输入关键词，在本书内查找</div></div>`;
+    const inp = d.querySelector('#searchBox');
+    if (inp) { inp.focus(); inp.addEventListener('input', () => runBookSearch(b, inp.value.trim())); }
+  }
+  function closeReaderSearch() {
+    const d = $('#searchDrawer'); if (d) { d.hidden = true; d.innerHTML = ''; }
+    const mask = $('#readerMask');
+    /* 没有其它面板开着时才撤掉遮罩，免得关了搜索却把背后的面板露出来 */
+    if (mask && $('#catalogDrawer').hidden && $('#readerPanel').hidden) mask.hidden = true;
+  }
+  function runBookSearch(b, q) {
+    const box = $('#searchResults'); if (!box) return;
+    const rec = contentCache[b.id];
+    if (!rec || !rec.chapters) { box.innerHTML = '<div class="search-empty">这本书还没载入正文</div>'; return; }
+    if (!q) { box.innerHTML = '<div class="search-empty">输入关键词，在本书内查找</div>'; return; }
+    const hits = [];
+    rec.chapters.forEach((c, i) => {
+      if (!c || !c.paras) return;
+      c.paras.forEach((p, pi) => {
+        if (p && p.indexOf(q) >= 0) {
+          const idx = p.indexOf(q), len = q.length;
+          const s = Math.max(0, idx - 16), e = Math.min(p.length, idx + len + 16);
+          const raw = (s > 0 ? '…' : '') + p.slice(s, e) + (e < p.length ? '…' : '');
+          const eq = esc(q);
+          const frag = esc(raw).split(eq).join('<mark>' + eq + '</mark>');
+          hits.push({ ch: i + 1, pi, frag });
+        }
+      });
+    });
+    if (!hits.length) { box.innerHTML = '<div class="search-empty">没有找到「' + esc(q) + '」</div>'; return; }
+    box.innerHTML = `<div class="search-count">找到 ${hits.length} 处匹配</div>` + hits.map((h) =>
+      `<button class="search-item" data-action="search-go" data-ch="${h.ch}" data-pi="${h.pi}">
+         <span class="si-ch">第 ${h.ch} 章</span><span class="si-frag">${h.frag}</span>
+       </button>`).join('');
+  }
+  function searchGo(goCh, pi) {
+    const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
+    const cur = Number(readerRoot.dataset.currentCh) || 1;
+    closeReaderSearch();
+    const focus = () => focusSearchHit(pi);
+    if (cur !== goCh) { switchChapter(b.id, goCh, 0); setTimeout(focus, 320); }
+    else focus();
+  }
+  function focusSearchHit(pi) {
+    const flip = state.settings.pageMode === 'flip';
+    let tries = 0;
+    const once = () => {
+      let el;
+      if (flip) {
+        const targetIdx = pi + 2; /* no + h1 占两个 idx，段 j 的 flip idx 即 j+2 */
+        const pg = flipState.pages.findIndex((pg) => pg.some((it) => it.idx === targetIdx));
+        if (pg >= 0) { flipState.page = pg; renderFlipPage(''); }
+        el = $('#flipPage [data-fi="' + targetIdx + '"]');
+      } else {
+        el = $('#readerPaper p[data-pi="' + pi + '"]');
+      }
+      if (el) {
+        if (!flip) el.scrollIntoView({ block: 'center' });
+        el.classList.remove('search-hit'); void el.offsetWidth; el.classList.add('search-hit');
+        setTimeout(() => el.classList.remove('search-hit'), 2800);
+        return;
+      }
+      if (tries++ < 12) { setTimeout(once, 90); return; }
+      toast('这一页还没渲染出来');
+    };
+    once();
+  }
+  async function searchAll(b) {
+    if (!b) return;
+    const box = $('#searchResults'); const hint = $('#searchHint');
+    if (box) box.innerHTML = '<div class="search-empty">正在联网载入全书章节…</div>';
+    const total = chapterList(b).length;
+    for (let i = 1; i <= total; i++) { try { await ensureChapter(b, i); } catch (e) { /* 忽略单章失败 */ } }
+    const q = ($('#searchBox') || {}).value ? $('#searchBox').value.trim() : '';
+    runBookSearch(b, q);
+    if (hint) hint.innerHTML = '已检索全部 ' + total + ' 章';
+  }
+
   /* ---------- 路由 ---------- */
   function parseRoute() {
     const raw = (location.hash || '#/store').replace(/^#\/?/, '');
@@ -3425,6 +3519,10 @@
       case 'reader-catalog': openPanel('catalog'); break;
       case 'reader-settings': openPanel('settings'); break;
       case 'panel-close': closePanel(); break;
+      case 'reader-search': openReaderSearch(); break;
+      case 'search-close': closeReaderSearch(); break;
+      case 'search-go': searchGo(ch, Number(el.dataset.pi)); break;
+      case 'search-all': searchAll(getBook(readerRoot.dataset.currentBook)); break;
       case 'reader-prev': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1); break;
       case 'reader-next': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1); break;
       case 'reader-retry': {
@@ -3629,7 +3727,7 @@
     }
     if (el.id === 'readerMask') closePanel();
   });
-  document.addEventListener('click', (e) => { if (e.target.id === 'readerMask') closePanel(); });
+  document.addEventListener('click', (e) => { if (e.target.id === 'readerMask') { closePanel(); closeReaderSearch(); } });
   document.addEventListener('input', (e) => {
     if (e.target.matches && e.target.matches('[data-rate-slider]')) {
       const r = clampRate(e.target.value);
@@ -3672,6 +3770,7 @@
       if (ui.metaDraft) { closeMetaEditor(); return; }
       if ($('#shelfMenu')) { closeShelfMenu(); return; }
       if (listen.active) { listenStopAll(); return; }
+      if (!$('#searchDrawer').hidden) { closeReaderSearch(); return; }
       const panel = $('#readerPanel');
       if (panel && !panel.hidden) { closePanel(); return; }
       if (readerRoot.dataset.currentBook) {

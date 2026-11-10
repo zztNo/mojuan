@@ -518,6 +518,33 @@ img, svg { display: block; }
   background: color-mix(in srgb, var(--cinnabar) 9%, transparent); color: var(--cinnabar);
   border-radius: 10px; font-size: 13px; font-family: var(--font-ui); cursor: pointer; }
 .cat-resume:hover { background: color-mix(in srgb, var(--cinnabar) 16%, transparent); }
+/* 阅读器内文搜索：盖在正文之上的抽屉，宣纸底、从右滑入 */
+.search-drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 92%); background: var(--paper, #f7f2e6);
+  box-shadow: -8px 0 30px rgba(60,40,20,.20); transform: translateX(100%); z-index: 40;
+  display: flex; flex-direction: column; font-family: var(--font-ui); }
+.search-drawer:not([hidden]) { animation: sdIn .22s ease forwards; }
+@keyframes sdIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.search-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 10px; font-size: 14px; font-weight: 600; color: var(--reader-ink); border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 10%, transparent); }
+.search-bar { display: flex; align-items: center; gap: 8px; margin: 12px 14px; padding: 9px 12px; border-radius: 10px; background: color-mix(in srgb, var(--reader-ink) 6%, transparent); color: var(--reader-sub); }
+.search-bar input { flex: 1; border: 0; background: transparent; font: inherit; font-size: 14px; color: var(--reader-ink); outline: none; }
+.search-hint { margin: 0 14px 6px; font-size: 12px; color: var(--reader-sub); }
+.linklike { background: none; border: 0; color: var(--cinnabar); font: inherit; font-size: 12px; cursor: pointer; padding: 0; text-decoration: underline; }
+.search-results { flex: 1; overflow-y: auto; padding: 4px 14px 20px; }
+.search-count { font-size: 12px; color: var(--reader-sub); margin: 4px 0 10px; }
+.search-empty { font-size: 13px; color: var(--reader-sub); text-align: center; padding: 30px 10px; line-height: 1.8; }
+.search-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; cursor: pointer; padding: 10px 8px; border-radius: 9px; font: inherit; color: var(--reader-ink); }
+.search-item:hover { background: color-mix(in srgb, var(--cinnabar) 8%, transparent); }
+.search-item .si-ch { display: block; font-size: 11px; color: var(--cinnabar); margin-bottom: 3px; letter-spacing: .05em; }
+.search-item .si-frag { display: block; font-size: 13.5px; line-height: 1.7; color: var(--reader-ink); }
+.search-item mark { background: color-mix(in srgb, var(--cinnabar) 30%, transparent); color: var(--cinnabar); border-radius: 3px; padding: 0 1px; }
+/* 搜索命中段落：朱砂底，短暂高亮后随动画淡出 */
+.reader-paper p.search-hit, .flip-page p.search-hit {
+  animation: shPulse 2.8s ease forwards;
+}
+@keyframes shPulse {
+  0% { background: linear-gradient(90deg, color-mix(in srgb, var(--cinnabar) 30%, transparent), transparent 72%); box-shadow: inset 3px 0 0 var(--cinnabar); border-radius: 3px; }
+  100% { background: transparent; box-shadow: none; border-radius: 3px; }
+}
 .reader-chapter-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 44px; padding-top: 22px; border-top: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent); font-family: var(--font-ui); font-size: 13px; }
 .reader-chapter-nav button { color: var(--reader-ink); display: flex; align-items: center; gap: 6px; opacity: .8; }
 .reader-chapter-nav button:hover { opacity: 1; color: var(--cinnabar); }
