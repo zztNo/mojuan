@@ -72,6 +72,21 @@
     if (c && c.paras && c.paras.length) return c.paras;
     return ['（这一章暂未取到正文，请稍后重试）'];
   }
+  /* 搜索用：把「现在拿得到」的章节正文摊平成一个数组，取不到的留 null。
+     内置卷走同步源（单文件离线版也走这条），在线 / 本地卷走 contentCache。 */
+  function loadedParas(b, rec) {
+    const total = chapterList(b).length;
+    const out = [];
+    let any = false;
+    for (let i = 0; i < total; i++) {
+      const c = rec && rec.chapters && rec.chapters[i];
+      if (c && c.paras && c.paras.length) { out.push(c.paras); any = true; continue; }
+      let sync = null;
+      try { sync = SRC.getChapterSync(b.id, i + 1); } catch (e) { sync = null; }
+      if (sync && sync.length) { out.push(sync); any = true; } else out.push(null);
+    }
+    return any ? out : [];
+  }
   /* 正文按需取：内置书首次打开要加载整本分片，在线源逐章取回 */
   async function ensureChapter(b, no) {
     if (!b || b.local) return;
@@ -317,6 +332,8 @@
     shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
     noteSearch: '', noteBook: '', noteColor: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
     noteMulti: false, notePicked: new Set(),
+    searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
+    bmNote: -1,
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
@@ -907,8 +924,10 @@
         </div>
       </div>`;
     }
+    /* 标签筛选带上卷数，一眼看出每个分组有几卷；空分组点不动 */
+    const tagN = (k) => (k === 'all' ? shelf.length : shelf.filter((b) => state.bookTags[b.id] === k).length);
     html += `<div class="chip-row shelf-filters">${[['all', '全部'], ['want', '想读'], ['reading', '在读'], ['done', '已读']].map(([k, l]) =>
-      `<button class="chip ${ui.shelfFilter === k ? 'active' : ''}" data-action="set-shelf-filter" data-val="${k}">${l}</button>`).join('')}</div>`;
+      `<button class="chip ${ui.shelfFilter === k ? 'active' : ''}" data-action="set-shelf-filter" data-val="${k}" ${k !== 'all' && !tagN(k) ? 'disabled' : ''}>${l} ${tagN(k)}</button>`).join('')}</div>`;
     html += `<div class="chip-row shelf-sorts">${[['recent', '最近阅读'], ['name', '书名'], ['added', '添加顺序']].map(([k, l]) =>
       `<button class="chip ${ui.shelfSort === k ? 'active' : ''}" data-action="set-shelf-sort" data-val="${k}">${l}</button>`).join('')}</div>`;
     html += `<div class="shelf-search">${icon('search', 'ic-sm')}<input id="shelfSearch" placeholder="搜书名 / 作者 / 分类" value="${esc(ui.shelfSearch || '')}" autocomplete="off"><button class="shelf-search-clear" data-action="clear-shelf-search" title="清空" ${ui.shelfSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>`;
@@ -1190,6 +1209,14 @@
             ${icon(inShelf ? 'check' : 'plus', 'ic-sm')} ${inShelf ? '已在藏卷' : '收入藏卷'}</button>
           ${b.local ? `<button class="btn btn-ghost btn-sm btn-danger" data-action="delete-local" data-id="${b.id}">${icon('trash', 'ic-sm')} 弃卷</button>` : ''}
         </div>
+        <div class="detail-tag-row">
+          <span class="filter-label">标记</span>
+          <div class="chip-row">
+            ${[['want', '想读'], ['reading', '在读'], ['done', '已读']].map(([k, l]) =>
+              `<button class="chip chip-sm ${state.bookTags[b.id] === k ? 'active' : ''}" data-action="set-book-tag" data-id="${b.id}" data-val="${k}">${l}</button>`).join('')}
+            ${state.bookTags[b.id] ? `<button class="chip chip-sm" data-action="set-book-tag" data-id="${b.id}" data-val="">清除</button>` : ''}
+          </div>
+        </div>
       </div>
     </div>`;
     html += `<div class="detail-cols">
@@ -1349,7 +1376,7 @@
       html += `<div class="section">${sectionHead('我的卷签 · ' + bmAll.length, '', '')}
         <div class="setting-list">
           ${bmAll.map(({ bid, m, i }) => `<div class="setting-row">
-            <div class="st" style="cursor:pointer" data-action="open-bookmark" data-id="${bid}" data-ch="${m.ch}" data-val="${i}">《${esc((getBook(bid) || {}).title || '已删除的卷')}》<small>${esc(m.title)} · 第 ${m.ch} 章${m.page ? ' · 第 ' + (m.page + 1) + ' 页' : ''}</small></div>
+            <div class="st" style="cursor:pointer" data-action="open-bookmark" data-id="${bid}" data-ch="${m.ch}" data-val="${i}">《${esc((getBook(bid) || {}).title || '已删除的卷')}》<small>${esc(m.title)} · 第 ${m.ch} 章${m.page ? ' · 第 ' + (m.page + 1) + ' 页' : ''}</small>${m.note ? `<i class="bm-note">${esc(m.note)}</i>` : ''}</div>
             <button class="btn btn-ghost btn-sm btn-danger" data-action="bookmark-del-global" data-id="${bid}" data-val="${i}">删除</button>
           </div>`).join('')}
         </div></div>`;
@@ -1507,6 +1534,12 @@
       <div id="readerPanel" hidden></div>
       <div class="catalog-drawer" id="catalogDrawer" hidden></div>
       <div class="search-drawer" id="searchDrawer" hidden></div>
+      <div class="search-nav" id="searchNav" hidden>
+        <button class="sn-btn" data-action="search-nav-prev" aria-label="上一处" title="上一处">‹</button>
+        <span class="sn-count" id="searchNavCount">—</span>
+        <button class="sn-btn" data-action="search-nav-next" aria-label="下一处" title="下一处">›</button>
+        <button class="sn-x" data-action="search-nav-close" aria-label="结束检索" title="结束检索">${icon('close', 'ic-sm')}</button>
+      </div>
       <div class="hl-pop" id="hlPop" hidden>
         <button class="hl-btn" data-action="hl-save">划线</button>
         <button class="hl-btn" data-action="hl-note-open">批注</button>
@@ -2071,7 +2104,7 @@
       const b = getBook(k.id);
       list.unshift({
         ch: k.ch, page: k.page, pct: (state.progress[k.id] || {}).pct || 0,
-        title: chapterList(b)[k.ch - 1].title, time: Date.now()
+        title: chapterList(b)[k.ch - 1].title, time: Date.now(), note: ''
       });
       toast('已添加卷签');
     }
@@ -3388,11 +3421,22 @@
             <button class="btn btn-ghost btn-sm" data-action="reader-next" ${cur >= chs.length ? 'disabled' : ''}>下一章 ${icon('right', 'ic-sm')}</button>
           </div>`
         : kind === 'annotation' ? annotationHtml(b)
-        : `<div class="catalog-list bookmark-list">${marks.length ? marks.map((m, i) => `
-            <li data-action="bookmark-goto" data-val="${i}">
-              <span><b>${esc(m.title)}</b><small>${new Date(m.time).toLocaleDateString('zh-CN')} · 第 ${m.ch} 章${m.page ? ' · 第 ' + (m.page + 1) + ' 页' : ''}</small></span>
+        : `<div class="catalog-list bookmark-list">${marks.length ? marks.map((m, i) => (ui.bmNote === i ? `
+            <li class="bm-editing" data-bm-editing="1">
+              <div class="bm-edit-head">第 ${m.ch} 章${m.page ? ' · 第 ' + (m.page + 1) + ' 页' : ''} · 写在卷签上的话</div>
+              <textarea id="bmNoteInput" rows="3" placeholder="为什么记下这一页？读到这里的想法…">${esc(m.note || '')}</textarea>
+              <div class="bm-edit-acts">
+                <button class="btn btn-ghost btn-sm" data-action="bm-note-cancel">取消</button>
+                <button class="btn btn-primary btn-sm" data-action="bm-note-save" data-val="${i}">保存</button>
+                ${m.note ? `<button class="btn btn-ghost btn-sm btn-danger" data-action="bm-note-clear" data-val="${i}">清除</button>` : ''}
+              </div>
+            </li>` : `
+            <li data-action="bookmark-goto" data-val="${i}" class="${m.note ? 'has-note' : ''}">
+              <span><b>${esc(m.title)}</b><small>${new Date(m.time).toLocaleDateString('zh-CN')} · 第 ${m.ch} 章${m.page ? ' · 第 ' + (m.page + 1) + ' 页' : ''}</small>
+                ${m.note ? `<i class="bm-note">${esc(m.note)}</i>` : ''}</span>
+              <button class="bm-del" data-action="bm-note-edit" data-val="${i}" title="${m.note ? '改备注' : '写备注'}">${icon('brush', 'ic-sm')}</button>
               <button class="bm-del" data-action="bookmark-del" data-val="${i}" title="删除卷签">${icon('trash', 'ic-sm')}</button>
-            </li>`).join('') : '<div class="cat-empty">还没有卷签<br><small>点顶部的星形按钮，把当前这一页收进卷签</small></div>'}</div>`;
+            </li>`)).join('') : '<div class="cat-empty">还没有卷签<br><small>点顶部的星形按钮，把当前这一页收进卷签</small></div>'}</div>`;
       drawer.innerHTML = `<div class="catalog-head"><span>${esc(b.title)}</span>
           <button class="icon-btn" data-action="panel-close" title="关闭">${icon('close', 'ic-sm')}</button></div>
         ${tabs}${content}`;
@@ -3410,9 +3454,12 @@
     /* 抽屉/设置面板一打开就把焦点送进去，键盘 Tab 才不会又跑回底下的正文 */
     const into = (drawer.hidden ? panel : drawer);
     if (into && !into.hidden) { into.setAttribute('tabindex', '-1'); into.focus({ preventScroll: true }); }
+    /* 面板盖上来时把检索条收起，免得压在抽屉/设置上 */
+    syncSearchNav();
   }
   function closePanel() {
     hideHlEdit();
+    ui.bmNote = -1;
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
     const hadFocus = document.activeElement && (document.activeElement === panel || document.activeElement === drawer
       || (panel && panel.contains(document.activeElement)) || (drawer && drawer.contains(document.activeElement)));
@@ -3421,6 +3468,7 @@
     if (drawer) { drawer.hidden = true; drawer.innerHTML = ''; }
     /* 面板里的元素被清掉了，焦点不能就这么掉在地上 */
     if (hadFocus) { const rd = $('#reader'); if (rd) rd.focus({ preventScroll: true }); }
+    syncSearchNav();
   }
   function switchChapter(id, ch, pct) {
     hideHlEdit();
@@ -3431,6 +3479,7 @@
     history.replaceState(null, '', '#/reader/' + id + '/' + ch);
     showReader(id, ch);
     closePanel();
+    if (ui.searchNavOn) syncSearchNav();
   }
 
   /* ---------- 阅读器内文搜索：在本书已载入的章节里找词，点结果跳到命中段落 ---------- */
@@ -3460,12 +3509,16 @@
   function runBookSearch(b, q) {
     const box = $('#searchResults'); if (!box) return;
     const rec = contentCache[b.id];
-    if (!rec || !rec.chapters) { box.innerHTML = '<div class="search-empty">这本书还没载入正文</div>'; return; }
+    ui.searchHits = []; ui.searchIdx = -1;
     if (!q) { box.innerHTML = '<div class="search-empty">输入关键词，在本书内查找</div>'; return; }
+    /* 正文来源有两条：在线/本地卷走 contentCache，内置卷直接走同步源。
+       只翻 contentCache 的话，内置卷（含单文件离线版）会永远被当成「还没载入正文」。 */
+    const chs = loadedParas(b, rec);
+    if (!chs.length) { box.innerHTML = '<div class="search-empty">这本书还没载入正文</div>'; return; }
     const hits = [];
-    rec.chapters.forEach((c, i) => {
-      if (!c || !c.paras) return;
-      c.paras.forEach((p, pi) => {
+    chs.forEach((paras, i) => {
+      if (!paras) return;
+      paras.forEach((p, pi) => {
         if (p && p.indexOf(q) >= 0) {
           const idx = p.indexOf(q), len = q.length;
           const s = Math.max(0, idx - 16), e = Math.min(p.length, idx + len + 16);
@@ -3477,18 +3530,41 @@
       });
     });
     if (!hits.length) { box.innerHTML = '<div class="search-empty">没有找到「' + esc(q) + '」</div>'; return; }
-    box.innerHTML = `<div class="search-count">找到 ${hits.length} 处匹配</div>` + hits.map((h) =>
-      `<button class="search-item" data-action="search-go" data-ch="${h.ch}" data-pi="${h.pi}">
+    ui.searchHits = hits; ui.searchQ = q;
+    box.innerHTML = `<div class="search-count">找到 ${hits.length} 处匹配<span class="sc-tip">点结果跳过去，之后可用「上一处 / 下一处」接着翻</span></div>` + hits.map((h, i) =>
+      `<button class="search-item" data-action="search-go" data-val="${i}">
          <span class="si-ch">第 ${h.ch} 章</span><span class="si-frag">${h.frag}</span>
        </button>`).join('');
   }
-  function searchGo(goCh, pi) {
+  /* 跳到第 i 处命中：跨章要等正文渲染完再定位，否则段落还不存在 */
+  function jumpSearchHit(i) {
+    const hits = ui.searchHits || [];
+    if (!hits.length) return;
+    if (i < 0) { toast('已经是第一处'); return; }
+    if (i >= hits.length) { toast('已经是最后一处'); return; }
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
+    ui.searchIdx = i; ui.searchNavOn = true; ui.searchBook = b.id;
+    const h = hits[i];
     const cur = Number(readerRoot.dataset.currentCh) || 1;
-    closeReaderSearch();
-    const focus = () => focusSearchHit(pi);
-    if (cur !== goCh) { switchChapter(b.id, goCh, 0); setTimeout(focus, 320); }
-    else focus();
+    if (cur !== h.ch) { switchChapter(b.id, h.ch, 0); setTimeout(() => { focusSearchHit(h.pi); syncSearchNav(); }, 320); }
+    else { focusSearchHit(h.pi); syncSearchNav(); }
+  }
+  function syncSearchNav() {
+    const bar = $('#searchNav'); if (!bar) return;
+    const n = (ui.searchHits || []).length;
+    const drawerOpen = !(($('#catalogDrawer') || {}).hidden) || !(($('#readerPanel') || {}).hidden);
+    const on = ui.searchNavOn && n > 0 && ui.searchIdx >= 0 && !drawerOpen
+      && readerRoot && readerRoot.dataset.currentBook === ui.searchBook;
+    bar.hidden = !on;
+    if (!on) return;
+    const c = $('#searchNavCount'); if (c) c.textContent = (ui.searchIdx + 1) + ' / ' + n;
+    const prev = $('[data-action="search-nav-prev"]'), next = $('[data-action="search-nav-next"]');
+    if (prev) prev.disabled = ui.searchIdx <= 0;
+    if (next) next.disabled = ui.searchIdx >= n - 1;
+  }
+  function closeSearchNav() {
+    ui.searchNavOn = false; ui.searchHits = []; ui.searchIdx = -1; ui.searchBook = '';
+    const bar = $('#searchNav'); if (bar) bar.hidden = true;
   }
   function focusSearchHit(pi) {
     const flip = state.settings.pageMode === 'flip';
@@ -3813,6 +3889,13 @@
         rerender(); break;
       }
       case 'set-shelf-filter': ui.shelfFilter = val; rerender(); break;
+      case 'set-book-tag': {
+        if (!id) break;
+        if (val) state.bookTags[id] = val; else delete state.bookTags[id];
+        save(); rerender();
+        toast(val ? '已标记为「' + TAG_LABEL[val] + '」' : '已清除标记');
+        break;
+      }
       case 'set-shelf-sort': ui.shelfSort = val; rerender(); break;
       case 'open-shortcut-help': openShortcutHelp(); break;
       case 'close-shortcut-help': closeShortcutHelp(); break;
@@ -4029,7 +4112,10 @@
       case 'panel-close': closePanel(); break;
       case 'reader-search': openReaderSearch(); break;
       case 'search-close': closeReaderSearch(); break;
-      case 'search-go': searchGo(ch, Number(el.dataset.pi)); break;
+      case 'search-go': closeReaderSearch(); jumpSearchHit(Number(val)); break;
+      case 'search-nav-prev': jumpSearchHit((ui.searchIdx || 0) - 1); break;
+      case 'search-nav-next': jumpSearchHit((ui.searchIdx || 0) + 1); break;
+      case 'search-nav-close': closeSearchNav(); break;
       case 'search-all': searchAll(getBook(readerRoot.dataset.currentBook)); break;
       case 'reader-prev': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1); break;
       case 'reader-next': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1); break;
@@ -4312,7 +4398,7 @@
         const bid = readerRoot.dataset.currentBook;
         const list = bookmarkList(bid).slice();
         list.splice(Number(val), 1);
-        state.bookmarks[bid] = list; save();
+        state.bookmarks[bid] = list; save(); ui.bmNote = -1;
         openPanel('bookmark'); syncBookmarkBtn(); toast('已删除卷签');
         break;
       }
@@ -4320,6 +4406,27 @@
         const list = bookmarkList(id).slice();
         list.splice(Number(val), 1);
         state.bookmarks[id] = list; save(); rerender(); toast('已删除卷签');
+        break;
+      }
+      case 'bm-note-edit': ui.bmNote = Number(val); openPanel('bookmark'); {
+        const t = $('#bmNoteInput'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+        break;
+      }
+      case 'bm-note-cancel': ui.bmNote = -1; openPanel('bookmark'); break;
+      case 'bm-note-clear': {
+        const bid = readerRoot.dataset.currentBook;
+        const m = bookmarkList(bid)[Number(val)];
+        if (!m) break;
+        m.note = ''; ui.bmNote = -1; save(); openPanel('bookmark'); toast('已清除备注');
+        break;
+      }
+      case 'bm-note-save': {
+        const bid = readerRoot.dataset.currentBook;
+        const m = bookmarkList(bid)[Number(val)];
+        if (!m) break;
+        const v = (($('#bmNoteInput') || {}).value || '').trim().slice(0, 300);
+        m.note = v; ui.bmNote = -1; save(); openPanel('bookmark');
+        toast(v ? '备注已保存' : '备注已清空');
         break;
       }
       case 'open-bookmark': {
@@ -4445,6 +4552,7 @@
       if ($('#shelfMenu')) { closeShelfMenu(); return; }
       if (listen.active) { listenStopAll(); return; }
       if (!$('#searchDrawer').hidden) { closeReaderSearch(); return; }
+      if (ui.searchNavOn) { closeSearchNav(); return; }
       const panel = $('#readerPanel');
       if (panel && !panel.hidden) { closePanel(); return; }
       if (readerRoot.dataset.currentBook) {

@@ -1,5 +1,5 @@
 /* 墨卷 · 离线缓存 */
-const CACHE = 'mojuan-v49';
+const CACHE = 'mojuan-v50';
 const ASSETS = [
   './', './index.html', './css/style.css',
   './js/data.js', './js/sources.js', './js/classics-meta.js', './js/classics.js',
