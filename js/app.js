@@ -805,9 +805,15 @@
     const pick = opts.edit
       ? `<div class="pick-box ${picked ? 'on' : ''}" data-action="pick-book" data-id="${b.id}">${picked ? icon('check', 'ic-sm') : ''}</div>`
       : '';
+    /* 书肆卡片角上的「收下」：省掉进详情页再点一次，已在藏卷时变成对勾，点一下可移出 */
+    const inShelf = state.shelf.includes(b.id);
+    const quick = opts.quickAdd && !opts.edit
+      ? `<button class="quick-add ${inShelf ? 'on' : ''}" data-action="${inShelf ? 'remove-shelf' : 'add-shelf'}" data-id="${b.id}"
+           title="${inShelf ? '已在藏卷 · 点击移出' : '收入藏卷'}" aria-label="${inShelf ? '移出藏卷' : '收入藏卷'}">${icon(inShelf ? 'check' : 'plus', 'ic-sm')}</button>`
+      : '';
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
     return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}" data-sc="${esc((b.category || '').toLowerCase())}">
-      <div style="position:relative">${coverHtml(b)}${badge}${pick}</div>
+      <div class="cover-wrap">${coverHtml(b)}${badge}${pick}${quick}</div>
       <div class="book-name">${b.title}</div>
       <div class="book-meta"><span class="bm-text">${b.author} · ${b.category}</span>${miniTags(b)}</div>
       ${prog}
@@ -1013,9 +1019,9 @@
         `<button class="quick-cat" data-action="quick-cat" data-val="${c}">${icon(ic)}<span>${c}</span></button>`).join('')}
     </div>`;
     html += `<div class="section">${sectionHead('墨客荐卷', '换荐', 'shuffle')}
-      <div class="book-hscroll" id="editorPick">${sorted(allBooks(), 'many').slice(0, 8).map((b) => bookCard(b, { badge: charNum(b) >= 100000 ? '长卷' : '' })).join('')}</div></div>`;
+      <div class="book-hscroll" id="editorPick">${sorted(allBooks(), 'many').slice(0, 8).map((b) => bookCard(b, { badge: charNum(b) >= 100000 ? '长卷' : '', quickAdd: true })).join('')}</div></div>`;
     html += `<div class="section">${sectionHead('为你荐一卷', '换荐', 'shuffle')}
-      <div class="book-hscroll" id="forYou">${sorted(allBooks().filter((b) => !state.shelf.includes(b.id)), 'long').slice(0, 7).map((b) => bookCard(b)).join('')}</div></div>`;
+      <div class="book-hscroll" id="forYou">${sorted(allBooks().filter((b) => !state.shelf.includes(b.id)), 'long').slice(0, 7).map((b) => bookCard(b, { quickAdd: true })).join('')}</div></div>`;
     const pool = allBooks();
     const daily = pool[new Date().getDate() % Math.max(1, pool.length)] || pool[0];
     const dailyInShelf = state.shelf.includes(daily.id);
@@ -1035,7 +1041,7 @@
     html += `<div class="section">${sectionHead('卷帙长短', '看卷榜', 'go-rank')}
       <div class="rank-list">${sorted(allBooks(), 'long').slice(0, 5).map((b, i) => bookRow(b, i, { rank: true })).join('')}</div></div>`;
     html += `<div class="section">${sectionHead('诸卷总览', '', '')}
-      <div class="rec-grid">${allBooks().map((b) => bookCard(b)).join('')}</div></div>`;
+      <div class="rec-grid">${allBooks().map((b) => bookCard(b, { quickAdd: true })).join('')}</div></div>`;
     return html;
   }
 
@@ -1069,7 +1075,7 @@
     let list = allBooks().filter((b) => (ui.cat === '全部' || b.category === ui.cat) && (ui.status === '全部' || sourceOf(b) === ui.status));
     list = sorted(list, ui.sortBy);
     html += `<div class="result-head">共 ${list.length} 卷符合条件</div>`;
-    html += list.length ? `<div class="book-grid">${list.map((b) => bookCard(b)).join('')}</div>`
+    html += list.length ? `<div class="book-grid">${list.map((b) => bookCard(b, { quickAdd: true })).join('')}</div>`
       : `<div class="empty">${icon('search')}<p>这个格子里暂时还空着</p><button class="btn btn-ghost" data-action="set-cat" data-val="全部">看看全部</button></div>`;
     return html;
   }
@@ -1084,7 +1090,7 @@
     const list = sorted(allBooks(), by);
     const top3 = list.slice(0, 3);
     html += `<div class="rank-top3">${top3.map((b, i) =>
-      `<div><div class="rank-crown">${['榜 首', '亚 卷', '探 花'][i]}</div>${bookCard(b)}</div>`).join('')}</div>`;
+      `<div><div class="rank-crown">${['榜 首', '亚 卷', '探 花'][i]}</div>${bookCard(b, { quickAdd: true })}</div>`).join('')}</div>`;
     html += `<div class="book-list">${list.slice(3).map((b, i) => bookRow(b, i + 3, { rank: true })).join('')}</div>`;
     return html;
   }
@@ -3364,10 +3370,18 @@
       const resumeHtml = (resumeCh && resumeCh <= chs.length)
         ? `<button class="cat-resume" data-action="catalog-goto" data-ch="${resumeCh}">${icon('play', 'ic-sm')} 继续读 · 第 ${resumeCh} 章 ${Math.round((resume.pct || 0) * 100)}%</button>`
         : '';
+      const noteMap = {};
+      annotationList(b.id).forEach((a) => { noteMap[a.ch] = (noteMap[a.ch] || 0) + 1; });
       const content = kind === 'catalog'
         ? `${resumeHtml}<div class="cat-search">${icon('search', 'ic-sm')}<input id="catalogSearch" placeholder="搜章节名，或直接输入第几章" autocomplete="off"></div>
-          <ul class="catalog-list" id="catalogList">${chs.map((c, i) =>
-            `<li class="${i + 1 === cur ? 'active' : ''}" data-action="catalog-goto" data-ch="${i + 1}">${esc(c.title)}<small>${i + 1}</small></li>`).join('')}</ul>
+          <ul class="catalog-list" id="catalogList">${chs.map((c, i) => {
+            const no = i + 1;
+            const n = noteMap[no] || 0;
+            const read = no < cur;
+            return `<li class="${no === cur ? 'active' : ''}${read ? ' read' : ''}" data-action="catalog-goto" data-ch="${no}">
+              <span class="cl-title">${esc(c.title)}</span>
+              <small>${read ? '<i class="ch-read">读过</i>' : ''}${n ? `<i class="ch-note" title="${n} 条笔记">✎${n}</i>` : ''}${no}</small></li>`;
+          }).join('')}</ul>
           <div class="cat-nav">
             <button class="btn btn-ghost btn-sm" data-action="reader-prev" ${cur <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
             <button class="btn btn-ghost btn-sm" data-action="copy-chapter" title="复制本章正文">${icon('brush', 'ic-sm')} 复制本章</button>
@@ -3899,7 +3913,7 @@
       case 'shuffle': {
         const pick = (arr, n) => arr.slice().sort(() => Math.random() - 0.5).slice(0, n);
         const box = $('#editorPick'); if (box) {
-          box.innerHTML = pick(allBooks(), 8).map((b) => bookCard(b, { badge: charNum(b) >= 100000 ? '长卷' : '' })).join('');
+          box.innerHTML = pick(allBooks(), 8).map((b) => bookCard(b, { badge: charNum(b) >= 100000 ? '长卷' : '', quickAdd: true })).join('');
           a11ySweep(box);
         }
         const fy = $('#forYou'); if (fy) {
@@ -4397,7 +4411,10 @@
         const num = parseInt(q, 10);
         $$('#catalogList li').forEach((li) => {
           const liNum = parseInt(li.dataset.ch, 10);
-          const hit = !q || li.textContent.toLowerCase().includes(q) || (!isNaN(num) && liNum === num);
+          /* 只比章名：li 里还挂着「读过 / ✎N / 序号」，混进来会让搜「读」命中一大片 */
+          const t = li.querySelector('.cl-title');
+          const name = (t ? t.textContent : li.textContent).toLowerCase();
+          const hit = !q || name.includes(q) || (!isNaN(num) && liNum === num);
           li.hidden = !hit;
         });
       }, 120);

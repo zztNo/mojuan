@@ -728,7 +728,11 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .catalog-list li { padding: 11px 20px; font-size: 13px; border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 7%, transparent); cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
 .catalog-list li:hover { background: var(--cinnabar-soft); }
 .catalog-list li.active { color: var(--cinnabar); font-weight: 600; }
-.catalog-list li small { color: var(--reader-sub); font-size: 10.5px; }
+.catalog-list li small { color: var(--reader-sub); font-size: 10.5px; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.catalog-list li.read .cl-title { color: var(--reader-sub); }
+.cl-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-read { font-style: normal; font-size: 9.5px; letter-spacing: .04em; padding: 1px 5px; border-radius: 3px; background: color-mix(in srgb, var(--reader-ink) 8%, transparent); }
+.ch-note { font-style: normal; font-size: 10px; color: var(--cinnabar); }
 .reader-mask { position: absolute; inset: 0; z-index: 4; background: rgba(0, 0, 0, .25); }
 
 /* ---------- 响应式 ---------- */
@@ -879,6 +883,18 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .book-card.editable, .book-row.editable { cursor: pointer; }
 .book-card.picked .cover { outline: 2px solid var(--cinnabar); outline-offset: 2px; }
 .book-row.picked { outline: 2px solid var(--cinnabar); outline-offset: 1px; }
+/* 书肆卡片角上的快捷收书按钮 */
+.cover-wrap { position: relative; }
+.quick-add {
+  position: absolute; right: 6px; bottom: 6px; z-index: 7; width: 26px; height: 26px; padding: 0;
+  display: grid; place-items: center; border-radius: 50%; cursor: pointer;
+  border: 1px solid rgba(255, 250, 240, .85); background: rgba(20, 24, 26, .5); color: #fff8ec;
+  backdrop-filter: blur(2px); transition: .18s;
+}
+.quick-add .ic { width: 13px; height: 13px; }
+.quick-add:hover { background: var(--cinnabar); border-color: var(--cinnabar); transform: scale(1.06); }
+.quick-add.on { background: var(--cinnabar); border-color: #fff8ec; }
+.quick-add.on:hover { background: color-mix(in srgb, var(--cinnabar) 78%, #000); }
 .edit-bar {
   position: fixed; z-index: 45; left: calc(var(--sidebar-w) + 24px); right: 24px; bottom: 22px;
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 18px;
