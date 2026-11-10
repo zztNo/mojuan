@@ -1002,11 +1002,25 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
   font-size: 11px; letter-spacing: .12em; color: var(--reader-sub);
 }
 .flip-foot b { color: var(--cinnabar); font-weight: 600; font-family: var(--font-serif); font-size: 13px; }
-.flip-page.anim-slide-next { animation: flipNext .32s cubic-bezier(.22, .68, .36, 1) both; }
-.flip-page.anim-slide-prev { animation: flipPrev .32s cubic-bezier(.22, .68, .36, 1) both; }
+.flip-page.anim-slide-next { animation: flipNext .26s cubic-bezier(.22, .68, .36, 1) both; }
+.flip-page.anim-slide-prev { animation: flipPrev .26s cubic-bezier(.22, .68, .36, 1) both; }
 .flip-page.anim-fade-next, .flip-page.anim-fade-prev { animation: ceIn .28s ease both; }
-@keyframes flipNext { from { transform: translateX(100%); opacity: .35; } to { transform: none; opacity: 1; } }
-@keyframes flipPrev { from { transform: translateX(-100%); opacity: .35; } to { transform: none; opacity: 1; } }
+/* 翻页时从旁边滑进来的那一页：和当前页同尺寸叠放，只做位移，不接手势 */
+.flip-page.flip-adj {
+  z-index: 2; pointer-events: none;
+  /* 实心纸色：新页是「盖上来的一页纸」，不是透出来的一层字 */
+  background: var(--reader-bg, #f7f2e6);
+  /* 左边那道影子让「这是压上来的新一页」一眼看得出，不是文字被切断 */
+  box-shadow: -10px 0 20px -8px rgba(45, 32, 20, .22);
+}
+.flip-page[hidden] { display: none; }
+/* 手指按着拖的时候别顺手选中字、也别让浏览器再算一遍滚动 */
+.reader-body.flip-dragging, .reader-body.flip-dragging * {
+  user-select: none !important; -webkit-user-select: none !important;
+}
+.reader-body.flip-dragging .flip-page { will-change: transform; }
+@keyframes flipNext { from { transform: translateX(100%); } to { transform: none; } }
+@keyframes flipPrev { from { transform: translateX(-100%); } to { transform: none; } }
 /* 测量层：与正式页同样的排版规则，但不占布局 */
 .flip-measure {
   position: absolute !important; left: -99999px; top: 0; visibility: hidden;

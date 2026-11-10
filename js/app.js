@@ -238,7 +238,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', pageMode: 'flip', flipAnim: 'none', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', pageMode: 'flip', flipAnim: 'slide', rate: 1, voiceURI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -282,10 +282,12 @@
         state.lastRead = state.shelf[0] || '';
       }
     }
-    state.v = 3;
-    /* 翻页动画默认改为「无动画」：旧默认 'slide' 在单页元素上几乎看不出来，
-     * 这里把存量用户也归一为 'none'，让"固定无动画"对所有人即时生效。 */
-    if (state.settings && state.settings.flipAnim === 'slide') state.settings.flipAnim = 'none';
+    /* 翻页动画换成真正的「整页滑动」了：旧默认 'none' 在单页元素上本来就看不出动静，
+     * 这里把存量用户一次性升到 'slide'。只做一次，之后用户在设置里选「无动画」要能留住。 */
+    if (ver < 4 && state.settings && (!state.settings.flipAnim || state.settings.flipAnim === 'none')) {
+      state.settings.flipAnim = 'slide';
+    }
+    state.v = 4;
     /* 迁移结果必须立刻落盘：否则用户把种子书重新加回藏卷后，
      * 下次启动又会因为版本号没升级而被当成种子再删一遍。
      * （此处 save() 还没初始化完，直接写 localStorage） */
@@ -1485,6 +1487,7 @@
     const bodyInner = flip
       ? `<div class="reader-paper flip-paper" id="readerPaper">
           <div class="flip-page" id="flipPage"><div class="reader-loading">正 在 分 页 …</div></div>
+          <div class="flip-page flip-adj" id="flipAdj" hidden aria-hidden="true"></div>
           <div class="flip-foot" id="flipFoot">—</div>
         </div>`
       : `<div class="reader-paper" id="readerPaper">
@@ -1665,17 +1668,22 @@
     m.remove();
     return pages.length ? pages : [[{ text: '（本章暂无内容）', type: 'p', indent: false }]];
   }
-  function renderFlipPage(dir) {
-    const fp = $('#flipPage'); if (!fp || !flipState.pages.length) return;
-    fp.className = 'flip-page';
-    fp.innerHTML = flipState.pages[flipState.page].map((it) => {
+  /* 一页的内容。翻页动画要同时摆两页，所以抽出来给「当前页」和「旁边那页」共用 */
+  function pageInner(pos) {
+    const page = flipState.pages[pos];
+    if (!page) return '';
+    return page.map((it) => {
       if (it.type === 'no') return `<div class="reader-chapter-no" data-fi="${it.idx}">${esc(it.text)}</div>`;
       if (it.type === 'h1') return `<h1 data-fi="${it.idx}">${esc(it.text)}</h1>`;
       if (it.type === 'notes') return `<button class="ch-notes-entry" data-action="open-notes" data-fi="${it.idx}">${icon('list', 'ic-sm')} ${esc(it.text)}</button>`;
       return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${highlightHtml(it.text, flipState.id, flipState.ch, it.idx - 2)}</p>`;
     }).join('');
-    void fp.offsetWidth;
-    if (dir && state.settings.flipAnim !== 'none') fp.classList.add('anim-' + state.settings.flipAnim + '-' + dir);
+  }
+  /* 落定某一页：换内容、页脚、进度。直接跳页与动画收尾都走这里 */
+  function commitPage(pos) {
+    const fp = $('#flipPage'); if (!fp) return;
+    flipState.page = pos;
+    fp.innerHTML = pageInner(pos);
     const foot = $('#flipFoot');
     if (foot) foot.innerHTML = `第 ${flipState.ch} 章 · <b>${flipState.page + 1}</b> / ${flipState.pages.length} 页`;
     const pct = flipState.pages.length > 1 ? flipState.page / (flipState.pages.length - 1) : 0;
@@ -1685,9 +1693,66 @@
     updateReaderSeek();
     syncBookmarkBtn();
   }
+  function renderFlipPage(dir) {
+    const fp = $('#flipPage'); if (!fp || !flipState.pages.length) return;
+    fp.className = 'flip-page';
+    fp.style.transform = '';
+    commitPage(flipState.page);
+    if (!dir) return;
+    /* 换章时没有「上一页」可摆，就让新章从翻过去的那一侧滑进来，衔接上翻页的手感 */
+    void fp.offsetWidth;
+    if (state.settings.flipAnim === 'fade') fp.classList.add('anim-fade-' + dir);
+    else if (state.settings.flipAnim === 'slide') fp.classList.add('anim-slide-' + dir);
+  }
+
+  /* ---------- 翻页动画：整页滑动 ---------- */
+  const FLIP_EASE = 'cubic-bezier(.22,.68,.36,1)';
+  let flipBusy = false;
+  /* 把「旁边那页」铺好，并放到屏幕外对应的那一侧 */
+  function ensureAdj(pos, dir, W) {
+    const adj = $('#flipAdj'); if (!adj) return null;
+    adj.innerHTML = pageInner(pos);
+    adj.hidden = false;
+    adj.style.transform = 'translate3d(' + (dir * W) + 'px,0,0)';
+    return adj;
+  }
+  function clearAdj() {
+    const adj = $('#flipAdj');
+    if (!adj) return;
+    adj.hidden = true; adj.innerHTML = ''; adj.style.transform = '';
+  }
+  /* 点击 / 键盘翻页：新页从一侧滑入、旧页滑出，两页一起动才是完整的翻页 */
+  function flipSlide(delta) {
+    const fp = $('#flipPage'), adj = $('#flipAdj');
+    const np = flipState.page + delta;
+    if (!fp || !adj || flipBusy || np < 0 || np >= flipState.pages.length) return false;
+    /* 老 WebView 没有 Web Animations，别把翻页卡死在这里，交给调用方直接换页 */
+    if (typeof fp.animate !== 'function') return false;
+    const W = fp.clientWidth || 1;
+    flipBusy = true;
+    ensureAdj(np, delta, W);
+    const a1 = fp.animate(
+      [{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(' + (-delta * W) + 'px,0,0)' }],
+      { duration: 240, easing: FLIP_EASE, fill: 'both' });
+    const a2 = adj.animate(
+      [{ transform: 'translate3d(' + (delta * W) + 'px,0,0)' }, { transform: 'translate3d(0,0,0)' }],
+      { duration: 240, easing: FLIP_EASE, fill: 'both' });
+    const finish = () => {
+      if (!flipBusy) return;
+      flipBusy = false;
+      commitPage(np);
+      fp.style.transform = '';
+      clearAdj();
+      a1.cancel(); a2.cancel();
+    };
+    a2.onfinish = finish;
+    /* 兜底：切到后台时 onfinish 不一定来，别把翻页卡在锁上 */
+    setTimeout(() => { if (flipBusy) finish(); }, 240 + 140);
+    return true;
+  }
   function flipBy(delta) {
     const fs = flipState;
-    if (!fs.pages.length) return;
+    if (!fs.pages.length || flipBusy) return;
     const np = fs.page + delta;
     const totalCh = chapterList(getBook(fs.id)).length;
     if (np < 0) {
@@ -1700,8 +1765,123 @@
       else toast('已经是最后一页了');
       return;
     }
+    if (state.settings.flipAnim === 'slide' && flipSlide(delta)) return;
     fs.page = np;
-    renderFlipPage(delta > 0 ? 'next' : 'prev');
+    renderFlipPage(state.settings.flipAnim === 'fade' ? (delta > 0 ? 'next' : 'prev') : '');
+  }
+  /* 跟手翻页：手指压住往左/右推，两页跟着走；松手看「推得够远 / 甩得够快」决定翻过去还是弹回。
+     这样按住后左右摆动也有连续反馈，而不是甩完才知道翻没翻。 */
+  function bindFlipDrag(body) {
+    let d = null, raf = 0;
+    const clampDx = (dx, W) => Math.max(-W * 0.98, Math.min(W * 0.98, dx));
+    const paint = () => {
+      raf = 0;
+      if (!d || !d.active) return;
+      const fp = $('#flipPage'), adj = $('#flipAdj');
+      if (fp) fp.style.transform = 'translate3d(' + d.pend + 'px,0,0)';
+      if (adj) adj.style.transform = 'translate3d(' + (d.dir * d.W + d.pend) + 'px,0,0)';
+    };
+    body.addEventListener('pointerdown', (ev) => {
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+      if (flipBusy || !flipState.pages.length) return;
+      if (ev.target.closest('button, a, mark.hl-mark')) return;
+      if ($('#hlPop') && !$('#hlPop').hidden) return;
+      if (window.getSelection && String(window.getSelection()).trim()) return;
+      d = { x: ev.clientX, y: ev.clientY, pid: ev.pointerId, dir: 0, W: 0, lock: false, active: false,
+        pend: 0, lastX: ev.clientX, lastT: performance.now(), v: 0 };
+    });
+    body.addEventListener('pointermove', (ev) => {
+      if (!d || d.dead || ev.pointerId !== d.pid) return;
+      /* 长按选词时手指一动就是拖选择手柄，别抢过来当翻页 */
+      if (window.getSelection && String(window.getSelection()).trim()) { d.dead = true; return; }
+      const dy = ev.clientY - d.y;
+      if (!d.lock) {
+        const dx0 = ev.clientX - d.x;
+        if (Math.abs(dx0) < 8 && Math.abs(dy) < 8) return;
+        /* 竖着划就当没这回事，交回给原来的点击/选择逻辑 */
+        if (Math.abs(dx0) <= Math.abs(dy) * 1.1) { d.dead = true; return; }
+        const dir = dx0 < 0 ? 1 : -1;
+        const fp = $('#flipPage'), adj = $('#flipAdj');
+        const np = flipState.page + dir;
+        /* 到头了：这次不跟手，但留着 d 好把松手那下 click 压掉 */
+        if (!fp || !adj || np < 0 || np >= flipState.pages.length) { d.dead = true; return; }
+        d.W = fp.clientWidth || 1;
+        ensureAdj(np, dir, d.W);
+        d.dir = dir; d.lock = true; d.active = true;
+        ui.flipSwiped = true;
+        body.classList.add('flip-dragging');
+        try { body.setPointerCapture(ev.pointerId); } catch (_) {}
+      }
+      /* 拖回起点再往另一边摆：把对侧那页换过来，两个方向都能跟手 */
+      const want = ev.clientX < d.x ? 1 : -1;
+      const npWant = flipState.page + want;
+      if (want !== d.dir && Math.abs(ev.clientX - d.x) > 20 && npWant >= 0 && npWant < flipState.pages.length) {
+        d.dir = want;
+        ensureAdj(npWant, want, d.W);
+      }
+      const now = performance.now(), dt = now - d.lastT;
+      if (dt > 0) d.v = (ev.clientX - d.lastX) / dt;
+      d.lastX = ev.clientX; d.lastT = now;
+      d.pend = clampDx(ev.clientX - d.x, d.W);
+      if (!raf) raf = requestAnimationFrame(paint); /* 一帧只挪一次 */
+      if (ev.cancelable) ev.preventDefault();
+    }, { passive: false });
+    const end = (ev) => {
+      if (!d) return;
+      const cur = d; d = null;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      body.classList.remove('flip-dragging');
+      const raw = ev.type === 'pointerup' ? ev.clientX : cur.lastX;
+      /* 手指确实挪过位置：松手那一下的 click 不能再翻一页 / 折叠工具栏，
+         否则「想往前拖但已在第一页」会反手翻到下一页 */
+      if (Math.abs(raw - cur.x) > 8) {
+        ui.flipSwiped = true;
+        setTimeout(() => { ui.flipSwiped = false; }, 350);
+      }
+      if (!cur.active) return;
+      const dx = clampDx(raw - cur.x, cur.W);
+      const far = Math.abs(dx) > Math.min(cur.W * 0.26, 96);
+      const flick = Math.abs(cur.v) > 0.32 && Math.sign(cur.v) === Math.sign(dx);
+      /* dx 必须落在目标页那一侧（dir=1 时是负数），往回拖不管拖多远都是弹回 */
+      const toward = dx * -cur.dir > 0;
+      flipDragSettle(cur.dir, dx, cur.W, toward && Math.abs(dx) > 14 && (far || flick));
+      setTimeout(() => { ui.flipSwiped = false; }, 350);
+    };
+    body.addEventListener('pointerup', end);
+    body.addEventListener('pointercancel', end);
+  }
+  /* 松手后的收尾：翻过去或弹回来，200ms 左右，不拖沓 */
+  function flipDragSettle(dir, dx, W, done) {
+    const fp = $('#flipPage'), adj = $('#flipAdj');
+    if (!fp || !adj) return;
+    const target = flipState.page + dir;
+    const go = done && target >= 0 && target < flipState.pages.length;
+    /* 老 WebView：没有动画就直接落位，至少行为是对的 */
+    if (typeof fp.animate !== 'function') {
+      fp.style.transform = '';
+      clearAdj();
+      if (go) commitPage(target);
+      return;
+    }
+    const to = done ? -dir * W : 0;
+    const dur = done ? 200 : 170;
+    const a1 = fp.animate(
+      [{ transform: 'translate3d(' + dx + 'px,0,0)' }, { transform: 'translate3d(' + to + 'px,0,0)' }],
+      { duration: dur, easing: FLIP_EASE, fill: 'both' });
+    const a2 = adj.animate(
+      [{ transform: 'translate3d(' + (dir * W + dx) + 'px,0,0)' }, { transform: 'translate3d(' + (dir * W + to) + 'px,0,0)' }],
+      { duration: dur, easing: FLIP_EASE, fill: 'both' });
+    flipBusy = true;
+    const finish = () => {
+      if (!flipBusy) return;
+      flipBusy = false;
+      if (go) commitPage(target);
+      fp.style.transform = '';
+      clearAdj();
+      a1.cancel(); a2.cancel();
+    };
+    a2.onfinish = finish;
+    setTimeout(() => { if (flipBusy) finish(); }, dur + 140);
   }
   /* ---------- 阅读进度条：全书比例、可拖动、跨章跳转 ---------- */
   function clamp01(x) { return Math.max(0, Math.min(1, x)); }
@@ -3322,20 +3502,7 @@
     const body = $('#readerBody');
     requestAnimationFrame(() => paginateAndRender(b, ch, token));
     if (flipMode) {
-      let sx = 0, sy = 0;
-      body.addEventListener('touchstart', (ev) => {
-        sx = ev.touches[0].clientX; sy = ev.touches[0].clientY;
-      }, { passive: true });
-      body.addEventListener('touchend', (ev) => {
-        /* 正在拖选择手柄选字时别当成翻页手势 */
-        if (window.getSelection && String(window.getSelection()).trim()) return;
-        const dx = ev.changedTouches[0].clientX - sx, dy = ev.changedTouches[0].clientY - sy;
-        if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.3) {
-          ui.flipSwiped = true;
-          flipBy(dx < 0 ? 1 : -1);
-          setTimeout(() => { ui.flipSwiped = false; }, 350);
-        }
-      }, { passive: true });
+      bindFlipDrag(body);
     } else {
       let tick;
       body.addEventListener('scroll', () => {
@@ -3403,7 +3570,7 @@
           <button class="rs-pill ${state.settings.pageMode === 'scroll' ? 'active' : ''}" data-action="set-pagemode" data-val="scroll">上下滚动</button>
         </div></div>
         <div class="rs-row"><label>翻页</label><div class="rs-pills">
-          ${[['slide', '卷动'], ['fade', '淡入'], ['none', '无动画']].map(([k, l]) =>
+          ${[['slide', '滑动'], ['fade', '淡入'], ['none', '无动画']].map(([k, l]) =>
             `<button class="rs-pill ${state.settings.flipAnim === k ? 'active' : ''}" data-action="set-flipanim" data-val="${k}">${l}</button>`).join('')}
         </div></div>
         <div class="rs-row rate-inline"><label>朗读</label>${rateSliderHtml(state.settings.rate, '语速 · 按住圆点拖动')}</div>
@@ -4102,6 +4269,7 @@
         break;
       case 'set-flipanim':
         state.settings.flipAnim = val; save();
+        if (val !== 'slide') clearAdj();
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-flipanim') p.classList.toggle('active', p.dataset.val === val); });
         break;
       case 'reset-data':
