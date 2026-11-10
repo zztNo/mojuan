@@ -1027,6 +1027,43 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .shelf-search input::placeholder { color: var(--ink-3); }
 .shelf-search .shelf-search-clear { display: flex; padding: 2px; border: 0; background: none; color: var(--ink-3); cursor: pointer; }
 .shelf-search .shelf-search-clear:hover { color: var(--cinnabar); }
+
+/* ---------- 划线 / 批注 ---------- */
+.hl-mark {
+  background: color-mix(in srgb, var(--cinnabar) 20%, transparent);
+  box-shadow: inset 0 -2px 0 var(--cinnabar);
+  border-radius: 2px; padding: 0 1px;
+}
+.hl-pop {
+  position: absolute; z-index: 160; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--reader-ink) 16%, transparent); border-radius: 9px;
+  background: var(--reader-bg); color: var(--reader-ink); box-shadow: var(--shadow);
+}
+.hl-pop[data-below="0"] { transform: translate(-50%, -100%); }
+.hl-btn {
+  padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--reader-ink) 16%, transparent);
+  border-radius: 6px; background: transparent; color: var(--reader-ink);
+  font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.hl-btn:hover { border-color: var(--cinnabar); color: var(--cinnabar); }
+.hl-btn.primary { background: var(--cinnabar); border-color: var(--cinnabar); color: #fff; }
+.hl-note {
+  position: absolute; top: calc(100% + 6px); left: 0; width: 236px; padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--reader-ink) 16%, transparent); border-radius: 9px;
+  background: var(--reader-bg); box-shadow: var(--shadow);
+}
+.hl-note textarea {
+  width: 100%; resize: vertical; box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--reader-ink) 16%, transparent); border-radius: 6px;
+  background: transparent; color: var(--reader-ink); font: inherit; font-size: 12.5px; padding: 6px; outline: none;
+}
+.hl-note .hl-btn { display: block; width: 100%; margin-top: 6px; }
+.ann-list li.ann-item { position: relative; display: block; padding: 10px 38px 10px 12px; cursor: pointer; }
+.ann-text { font-family: var(--font-serif); font-size: 13.5px; color: var(--reader-ink); line-height: 1.7; }
+.ann-note { margin-top: 5px; font-size: 12.5px; color: var(--cinnabar); line-height: 1.6; }
+.ann-meta { margin-top: 5px; font-size: 11px; color: var(--reader-sub); }
+.ann-item .bm-del { position: absolute; right: 8px; top: 10px; }
 .mini-tag {
   margin-left: 5px; padding: 0 4px; border-radius: 4px; white-space: nowrap;
   font-size: 10px; color: var(--jade); border: 1px solid var(--line);

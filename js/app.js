@@ -235,6 +235,8 @@
     localBooks: [],
     covers: {},
     bookmarks: {},
+    annotations: {},
+    listenScope: 'book',
     pinned: [],
     bookTags: {}
   };
@@ -281,6 +283,7 @@
         checkin: Object.assign({}, DEFAULTS.checkin, raw.checkin || {}),
         covers: Object.assign({}, DEFAULTS.covers, raw.covers || {}),
         bookmarks: Object.assign({}, DEFAULTS.bookmarks, raw.bookmarks || {}),
+        annotations: Object.assign({}, DEFAULTS.annotations, raw.annotations || {}),
         bookTags: Object.assign({}, DEFAULTS.bookTags, raw.bookTags || {}),
         pinned: Array.isArray(raw.pinned) ? raw.pinned : [],
         readLog: Object.assign({}, DEFAULTS.readLog, raw.readLog || {})
@@ -784,7 +787,7 @@
       ? `<div class="pick-box ${picked ? 'on' : ''}" data-action="pick-book" data-id="${b.id}">${picked ? icon('check', 'ic-sm') : ''}</div>`
       : '';
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
-    return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}">
+    return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}" data-sc="${esc((b.category || '').toLowerCase())}">
       <div style="position:relative">${coverHtml(b)}${badge}${pick}</div>
       <div class="book-name">${b.title}</div>
       <div class="book-meta"><span class="bm-text">${b.author} · ${b.category}</span>${miniTags(b)}</div>
@@ -798,7 +801,7 @@
       ? `<div class="pick-box row ${picked ? 'on' : ''}" data-action="pick-book" data-id="${b.id}">${picked ? icon('check', 'ic-sm') : ''}</div>`
       : '';
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
-    return `<div class="book-row ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}">
+    return `<div class="book-row ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}" data-sc="${esc((b.category || '').toLowerCase())}">
       ${pick}
       ${opts.rank ? `<div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>` : ''}
       <div style="width:62px;flex:none">${coverHtml(b)}</div>
@@ -874,7 +877,7 @@
       `<button class="chip ${ui.shelfFilter === k ? 'active' : ''}" data-action="set-shelf-filter" data-val="${k}">${l}</button>`).join('')}</div>`;
     html += `<div class="chip-row shelf-sorts">${[['recent', '最近阅读'], ['name', '书名'], ['added', '添加顺序']].map(([k, l]) =>
       `<button class="chip ${ui.shelfSort === k ? 'active' : ''}" data-action="set-shelf-sort" data-val="${k}">${l}</button>`).join('')}</div>`;
-    html += `<div class="shelf-search">${icon('search', 'ic-sm')}<input id="shelfSearch" placeholder="搜书名 / 作者" value="${esc(ui.shelfSearch || '')}" autocomplete="off"><button class="shelf-search-clear" data-action="clear-shelf-search" title="清空" ${ui.shelfSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>`;
+    html += `<div class="shelf-search">${icon('search', 'ic-sm')}<input id="shelfSearch" placeholder="搜书名 / 作者 / 分类" value="${esc(ui.shelfSearch || '')}" autocomplete="off"><button class="shelf-search-clear" data-action="clear-shelf-search" title="清空" ${ui.shelfSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>`;
     html += `<div class="shelf-toolbar"><h2 class="section-title">架上诸卷</h2>
       <div class="shelf-tools">
         <button class="btn btn-ghost btn-sm shelf-organize" data-action="toggle-edit">${icon('settings', 'ic-sm')} <span>整理</span></button>
@@ -962,7 +965,7 @@
     const q = ui.shelfSearch.toLowerCase();
     const vis = [];
     $$('[data-shelf-card]').forEach((el) => {
-      const hit = !q || (el.dataset.st || '').includes(q) || (el.dataset.sa || '').includes(q);
+      const hit = !q || (el.dataset.st || '').includes(q) || (el.dataset.sa || '').includes(q) || (el.dataset.sc || '').includes(q);
       el.hidden = !hit;
       if (hit) vis.push(el.dataset.id);
     });
@@ -1355,7 +1358,7 @@
       : `<div class="reader-paper" id="readerPaper">
           <div class="reader-chapter-no">${esc(b.title)} · ${esc(b.author)}</div>
           <h1>${esc(cur.title)}</h1>
-          ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${esc(p)}</p>`).join('')}
+          ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${highlightHtml(p, b.id, ch, j)}</p>`).join('')}
           ${notes.length && !errMsg ? `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} 注释 · ${notes.length} 条</button>` : ''}
           <div class="reader-chapter-nav">
             <button data-action="reader-prev" ${ch <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
@@ -1379,7 +1382,7 @@
         <div class="rb-info" id="rbLabel">—</div>
       </div>
       <div class="rb-menu" id="rbMenu">
-        <button class="rb-mbtn" data-action="reader-catalog" title="目录与卷签">${icon('list')}<span>目录</span></button>
+        <button class="rb-mbtn" data-action="reader-catalog" title="目录 / 卷签 / 笔记">${icon('list')}<span>目录</span></button>
         <button class="rb-mbtn ${inShelf ? 'is-on' : ''}" data-action="reader-shelf-toggle" id="shelfBtn" data-on="${inShelf}" title="加入 / 移出藏卷">${icon(inShelf ? 'check' : 'plus')}<span>${inShelf ? '已在藏卷' : '收入藏卷'}</span></button>
         <button class="rb-mbtn" data-action="toggle-bookmark" id="bmBtn" title="添加 / 移除卷签">${icon('star')}<span>珍藏</span></button>
         <button class="rb-mbtn" data-action="toggle-tts" id="ttsBtn" title="打开听卷界面">${icon('volume')}<span>听卷</span></button>
@@ -1399,6 +1402,14 @@
       <div id="readerPanel" hidden></div>
       <div class="catalog-drawer" id="catalogDrawer" hidden></div>
       <div class="search-drawer" id="searchDrawer" hidden></div>
+      <div class="hl-pop" id="hlPop" hidden>
+        <button class="hl-btn" data-action="hl-save">划线</button>
+        <button class="hl-btn" data-action="hl-note-open">批注</button>
+        <div class="hl-note" id="hlNote" hidden>
+          <textarea id="hlNoteInput" rows="2" placeholder="写点想法（可留空）"></textarea>
+          <button class="hl-btn primary" data-action="hl-save-note">保存</button>
+        </div>
+      </div>
     </div>`;
   }
   function applyReaderStyle() {
@@ -1511,7 +1522,7 @@
       if (it.type === 'no') return `<div class="reader-chapter-no" data-fi="${it.idx}">${esc(it.text)}</div>`;
       if (it.type === 'h1') return `<h1 data-fi="${it.idx}">${esc(it.text)}</h1>`;
       if (it.type === 'notes') return `<button class="ch-notes-entry" data-action="open-notes" data-fi="${it.idx}">${icon('list', 'ic-sm')} ${esc(it.text)}</button>`;
-      return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${esc(it.text)}</p>`;
+      return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${highlightHtml(it.text, flipState.id, flipState.ch, it.idx - 2)}</p>`;
     }).join('');
     void fp.offsetWidth;
     if (dir && state.settings.flipAnim !== 'none') fp.classList.add('anim-' + state.settings.flipAnim + '-' + dir);
@@ -1659,6 +1670,84 @@
 
   /* ---------- 卷签 ---------- */
   function bookmarkList(id) { return state.bookmarks[id] || []; }
+
+  /* ---------- 划线 / 批注 ---------- */
+  function annotationList(id) { return state.annotations[id] || []; }
+  function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  /* 把本章本段的所有划线一次性套 <mark>：先 esc 再单次正则替换，
+     既防 XSS，又避免多条重叠划线把已插入的标签二次拆坏。 */
+  function highlightHtml(raw, bid, ch, pi) {
+    const qs = annotationList(bid).filter((a) => a.ch === ch && a.pi === pi && a.text)
+      .map((a) => esc(String(a.text).trim())).filter(Boolean);
+    const out = esc(raw);
+    if (!qs.length) return out;
+    qs.sort((x, y) => y.length - x.length);
+    return out.replace(new RegExp('(' + qs.map(escRe).join('|') + ')', 'g'), '<mark class="hl-mark">$1</mark>');
+  }
+  /* 只重刷受影响的那一段（或翻页拆出来的几块），不整页重渲染，滚动位置不丢 */
+  function refreshHlParas(bid, ch, pi) {
+    $$('#readerPaper p[data-pi="' + pi + '"], #flipPage p[data-fi="' + (pi + 2) + '"]').forEach((el) => {
+      el.innerHTML = highlightHtml(el.textContent, bid, ch, pi);
+    });
+  }
+  let hlDraft = null;
+  function hideHlPop() {
+    const p = $('#hlPop'); if (p) p.hidden = true;
+    const n = $('#hlNote'); if (n) n.hidden = true;
+    hlDraft = null;
+  }
+  const hlParaOf = (n) => {
+    const el = n && (n.nodeType === 3 ? n.parentElement : n);
+    return el && el.closest ? el.closest('#readerPaper p[data-pi], #flipPage p[data-fi]') : null;
+  };
+  function onReaderSelection() {
+    if (!readerRoot.dataset.currentBook) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const text = String(sel).trim();
+    if (!text || text.length > 500) return;
+    const para = hlParaOf(sel.anchorNode), endPara = hlParaOf(sel.focusNode);
+    if (!para || !endPara) return;
+    /* 翻页会把长段拆成多块，跨块选中的文字在任一单块里都不完整、高亮会对不上，
+       所以只接受同一段落 DOM 内的选区 */
+    if (para !== endPara) { toast('一次只划一块内的文字'); return; }
+    const pi = para.dataset.pi != null ? Number(para.dataset.pi) : Number(para.dataset.fi) - 2;
+    if (isNaN(pi) || pi < 0) return;
+    const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
+    hlDraft = { bid: b.id, ch: Number(readerRoot.dataset.currentCh) || 1, pi, text };
+    const pop = $('#hlPop'), note = $('#hlNote'); if (!pop) return;
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    const below = r.bottom + 120 < window.innerHeight;
+    pop.dataset.below = below ? '1' : '0';
+    pop.hidden = false;
+    pop.style.left = Math.max(92, Math.min(window.innerWidth - 92, r.left + r.width / 2)) + 'px';
+    pop.style.top = (below ? r.bottom + 8 : Math.max(10, r.top - 8)) + 'px';
+    if (note) note.hidden = true;
+  }
+  function saveHl(note) {
+    if (!hlDraft) return;
+    const d = hlDraft;
+    const list = state.annotations[d.bid] || (state.annotations[d.bid] = []);
+    const dup = list.some((a) => a.ch === d.ch && a.pi === d.pi && a.text === d.text && (a.note || '') === (note || ''));
+    if (!dup) { list.push({ ch: d.ch, pi: d.pi, text: d.text, note: note || '', time: Date.now() }); save(); }
+    refreshHlParas(d.bid, d.ch, d.pi);
+    hideHlPop();
+    try { window.getSelection().removeAllRanges(); } catch (e) { /* 忽略 */ }
+    toast(dup ? '这条已经记下了' : (note ? '批注已存' : '已划线'));
+  }
+  function annotationHtml(b) {
+    const list = annotationList(b.id);
+    if (!list.length) return '<div class="cat-empty">还没有划线或批注<br><small>在正文里选中一段文字，就能划线、写批注</small></div>';
+    const items = list.map((a, i) => ({ a, i }))
+      .sort((x, y) => x.a.ch - y.a.ch || x.a.pi - y.a.pi || x.a.time - y.a.time);
+    return `<div class="catalog-list ann-list">${items.map(({ a, i }) => `
+      <li class="ann-item" data-action="annotation-goto" data-val="${i}">
+        <div class="ann-text">${esc(a.text.length > 64 ? a.text.slice(0, 64) + '…' : a.text)}</div>
+        ${a.note ? `<div class="ann-note">${esc(a.note)}</div>` : ''}
+        <div class="ann-meta">第 ${a.ch} 章 · 第 ${a.pi + 1} 段 · ${new Date(a.time).toLocaleDateString('zh-CN')}</div>
+        <button class="bm-del" data-action="annotation-del" data-val="${i}" title="删除">${icon('trash', 'ic-sm')}</button>
+      </li>`).join('')}</div>`;
+  }
   function bookKey() {
     return {
       id: readerRoot.dataset.currentBook,
@@ -1741,7 +1830,7 @@
     bookId: null, ch: 1, paras: [], text: '',
     sents: [], sentIndex: 0,
     charIndex: 0, paraIndex: 0,
-    rate: 1, voiceURI: '', timerMin: 0, timerAt: 0,
+    rate: 1, voiceURI: '', timerMin: 0, timerAt: 0, scope: 'book',
     elapsed: 0, startedAt: 0, lastStart: 0, boundaryOK: false,
     remoteOff: false,
     prevOverflow: ''
@@ -2256,9 +2345,10 @@
     if (listen.startedAt) { listen.elapsed += (Date.now() - listen.startedAt) / 1000; listen.startedAt = 0; }
     listen.charIndex = listen.text.length;
     const b = getBook(listen.bookId);
-    if (b && listen.ch < chapterList(b).length) { listenGoChapter(listen.ch + 1, true); return; }
+    /* 「只读本章」：本章念完就停，不自动续下一章；手动点下一章仍可继续 */
+    if (listen.scope !== 'chapter' && b && listen.ch < chapterList(b).length) { listenGoChapter(listen.ch + 1, true); return; }
     listen.playing = false;
-    toast('这一卷读完了');
+    toast(listen.scope === 'chapter' ? '这一章读完了' : '这一卷读完了');
     listenRenderDynamic();
   }
   /* 锁屏 / 通知栏 / 耳机按键：没有这层，手机一锁屏就断，还得掏出来点播放 */
@@ -2356,6 +2446,7 @@
           <button data-action="listen-panel" data-val="voice">音色</button>
           <button data-action="listen-panel" data-val="timer" id="ltTimer">定时</button>
           <button data-action="listen-panel" data-val="catalog">目录</button>
+          <button data-action="listen-scope-toggle" id="ltScope" title="切换朗读范围">范围 · ${listen.scope === 'chapter' ? '本章' : '全书'}</button>
         </div>
         <div id="listenPanel" class="listen-panel" hidden></div>
       </div>
@@ -2599,6 +2690,7 @@
       listen.ch = Math.max(1, Math.min(chapterList(b).length, listen.ch));
     }
     listen.rate = clampRate(state.settings.rate);
+    listen.scope = state.listenScope === 'chapter' ? 'chapter' : 'book';
     listen.voiceURI = state.settings.voiceURI || '';
     /* 每次重新打开听卷都再试一次在线音色，别因为上次失败就永远不用 */
     listen.remoteOff = false;
@@ -2844,6 +2936,8 @@
         sx = ev.touches[0].clientX; sy = ev.touches[0].clientY;
       }, { passive: true });
       body.addEventListener('touchend', (ev) => {
+        /* 正在拖选择手柄选字时别当成翻页手势 */
+        if (window.getSelection && String(window.getSelection()).trim()) return;
         const dx = ev.changedTouches[0].clientX - sx, dy = ev.changedTouches[0].clientY - sy;
         if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.3) {
           ui.flipSwiped = true;
@@ -2895,6 +2989,7 @@
     setBgInert(false);
   }
   function openPanel(kind) {
+    hideHlPop();
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
     mask.hidden = false; drawer.hidden = true;
@@ -2931,7 +3026,7 @@
           <button class="icon-btn" data-action="panel-close" title="关闭">${icon('close', 'ic-sm')}</button></div>
         <ul class="rn-list">${notes.map((t) => `<li>${esc(t)}</li>`).join('') || '<li>本章没有注释</li>'}</ul>
       </div>`;
-    } else if (kind === 'catalog' || kind === 'bookmark') {
+    } else if (kind === 'catalog' || kind === 'bookmark' || kind === 'annotation') {
       panel.hidden = true; drawer.hidden = false;
       ui.catalogTab = kind;
       const cur = Number(readerRoot.dataset.currentCh) || 1;
@@ -2940,6 +3035,7 @@
       const tabs = `<div class="cat-tabs">
         <button class="${kind === 'catalog' ? 'active' : ''}" data-action="open-panel" data-val="catalog">目录 ${chs.length}</button>
         <button class="${kind === 'bookmark' ? 'active' : ''}" data-action="open-panel" data-val="bookmark">卷签 ${marks.length}</button>
+        <button class="${kind === 'annotation' ? 'active' : ''}" data-action="open-panel" data-val="annotation">笔记 ${annotationList(b.id).length}</button>
       </div>`;
       const resume = state.progress[b.id] || {};
       const resumeCh = resume.ch || 0;
@@ -2954,6 +3050,7 @@
             <button class="btn btn-ghost btn-sm" data-action="reader-prev" ${cur <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
             <button class="btn btn-ghost btn-sm" data-action="reader-next" ${cur >= chs.length ? 'disabled' : ''}>下一章 ${icon('right', 'ic-sm')}</button>
           </div>`
+        : kind === 'annotation' ? annotationHtml(b)
         : `<div class="catalog-list bookmark-list">${marks.length ? marks.map((m, i) => `
             <li data-action="bookmark-goto" data-val="${i}">
               <span><b>${esc(m.title)}</b><small>${new Date(m.time).toLocaleDateString('zh-CN')} · 第 ${m.ch} 章${m.page ? ' · 第 ' + (m.page + 1) + ' 页' : ''}</small></span>
@@ -3203,6 +3300,8 @@
     if (goEl) { go(goEl.dataset.go); return; }
     const el = e.target.closest('[data-action]');
     if (!el) {
+      /* 刚划完字时点正文只收起工具条，别顺手翻页 */
+      if ($('#hlPop') && !$('#hlPop').hidden) { hideHlPop(); return; }
       if (e.target.closest('#readerBody') && !e.target.closest('button')) {
         if (ui.flipSwiped) { ui.flipSwiped = false; return; }
         if (state.settings.pageMode === 'flip' && $('#reader')) {
@@ -3588,6 +3687,14 @@
         break;
       }
       case 'listen-panel': listenPanel(val); break;
+      case 'listen-scope-toggle': {
+        const next = listen.scope === 'chapter' ? 'book' : 'chapter';
+        listen.scope = next; state.listenScope = next; save();
+        const btn = $('#ltScope');
+        if (btn) btn.textContent = '范围 · ' + (next === 'chapter' ? '本章' : '全书');
+        toast(next === 'chapter' ? '只读本章 · 读完即停' : '从本章读到全书完');
+        break;
+      }
       case 'listen-panel-close': {
         const p = $('#listenPanel');
         if (p) { p.hidden = true; p.innerHTML = ''; }
@@ -3691,6 +3798,33 @@
       }
       case 'open-panel': openPanel(val); break;
       case 'open-notes': openPanel('notes'); break;
+      case 'hl-save': saveHl(''); break;
+      case 'hl-note-open': {
+        const n = $('#hlNote'), i = $('#hlNoteInput');
+        if (n) n.hidden = false;
+        if (i) i.focus();
+        break;
+      }
+      case 'hl-save-note': saveHl((($('#hlNoteInput') || {}).value || '').trim()); break;
+      case 'annotation-goto': {
+        const b = getBook(readerRoot.dataset.currentBook);
+        const a = b && annotationList(b.id)[Number(val)];
+        if (!a) break;
+        closePanel();
+        const cur = Number(readerRoot.dataset.currentCh) || 1;
+        if (cur !== a.ch) { switchChapter(b.id, a.ch, 0); setTimeout(() => focusSearchHit(a.pi), 320); }
+        else focusSearchHit(a.pi);
+        break;
+      }
+      case 'annotation-del': {
+        const b = getBook(readerRoot.dataset.currentBook); if (!b) break;
+        const list = annotationList(b.id), idx = Number(val), d = list[idx];
+        if (!d) break;
+        list.splice(idx, 1); state.annotations[b.id] = list; save();
+        refreshHlParas(b.id, d.ch, d.pi);
+        openPanel('annotation'); toast('已删除');
+        break;
+      }
       case 'set-rate': applyRate(val); break;
       case 'reader-step': {
         const bid = readerRoot.dataset.currentBook; if (!bid) break;
@@ -3757,6 +3891,18 @@
     if (el.id === 'readerMask') closePanel();
   });
   document.addEventListener('click', (e) => { if (e.target.id === 'readerMask') { closePanel(); closeReaderSearch(); } });
+  /* 划完一段正文才弹「划线 / 批注」；点工具条内部不重新检测，免得把刚选中的清掉 */
+  document.addEventListener('pointerup', (e) => {
+    if (e.target && e.target.closest && e.target.closest('#hlPop')) return;
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) { hideHlPop(); return; }
+      const pop = $('#hlPop'), txt = String(sel).trim();
+      /* 选区没变就别重弹：用户正在批注框里打字，重渲会把输入框收掉 */
+      if (pop && !pop.hidden && hlDraft && hlDraft.text === txt) return;
+      if ($('#reader')) onReaderSelection();
+    }, 20);
+  });
   document.addEventListener('input', (e) => {
     if (e.target.matches && e.target.matches('[data-rate-slider]')) {
       const r = clampRate(e.target.value);
@@ -3801,6 +3947,12 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      /* 焦点在藏卷搜索框里时，Esc 只清空搜索，不去动听书或阅读器 */
+      const si = $('#shelfSearch');
+      if (si && si.value && document.activeElement === si) {
+        e.preventDefault(); si.value = ''; applyShelfSearch(''); return;
+      }
+      if ($('#hlPop') && !$('#hlPop').hidden) { hideHlPop(); return; }
       if (ui.coverDraft) { closeCoverEditor(); return; }
       if (ui.metaDraft) { closeMetaEditor(); return; }
       if ($('#shelfMenu')) { closeShelfMenu(); return; }
