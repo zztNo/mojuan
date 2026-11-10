@@ -315,7 +315,7 @@
     coverDraft: null, flipHint: null, flipSwiped: false,
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
     shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
-    noteSearch: '', noteBook: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
+    noteSearch: '', noteBook: '', noteColor: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
     noteMulti: false, notePicked: new Set(),
     tocLoading: false, tocFailed: false
   };
@@ -1363,6 +1363,13 @@
             ${noteBooks.map((bid) => `<option value="${esc(bid)}" ${ui.noteBook === bid ? 'selected' : ''}>《${esc((getBook(bid) || {}).title || bid)}》</option>`).join('')}
           </select>
           <button class="shelf-search-clear" data-action="clear-note-search" title="清空" ${ui.noteSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>
+        <div class="chip-row note-color-row">
+          <button class="chip ${ui.noteColor ? '' : 'active'}" data-action="set-note-color" data-val="">全部 ${annAll.length}</button>
+          ${[['red', '朱砂'], ['jade', '青竹'], ['gold', '泥金']].map(([k, l]) => {
+            const n = annAll.filter((x) => (x.a.color || 'red') === k).length;
+            return `<button class="chip ${ui.noteColor === k ? 'active' : ''}" data-action="set-note-color" data-val="${k}" ${n ? '' : 'disabled'}>${l} ${n}</button>`;
+          }).join('')}
+        </div>
         ${ui.noteMulti ? `<div class="note-multi-bar">
           <button class="btn btn-ghost btn-sm" data-action="note-pick-all" id="notePickAll">全选</button>
           <span class="note-pick-count" id="notePickCount">已选 ${ui.notePicked.size} 条</span>
@@ -1377,7 +1384,7 @@
             const hay = (bt + ' ' + a.text + ' ' + (a.note || '') + ' 第' + a.ch + '章').toLowerCase();
             const key = bid + ':' + i;
             const on = ui.notePicked.has(key);
-            return `<div class="setting-row${ui.noteMulti ? ' note-multi' : ''}${on ? ' picked' : ''}" data-note-item="1" data-note-book="${esc(bid)}" data-note-key="${esc(key)}" data-note-search="${esc(hay)}">
+            return `<div class="setting-row${ui.noteMulti ? ' note-multi' : ''}${on ? ' picked' : ''}" data-note-item="1" data-note-book="${esc(bid)}" data-note-key="${esc(key)}" data-note-color="${esc(a.color || 'red')}" data-note-search="${esc(hay)}">
               ${ui.noteMulti ? `<span class="note-pick ${on ? 'on' : ''}">${on ? icon('check', 'ic-sm') : ''}</span>` : ''}
               <div class="st" style="cursor:pointer" data-action="open-annotation" data-id="${esc(bid)}" data-val="${i}">《${esc(bt)}》<small><i class="ann-dot hl-${esc(a.color || 'red')}"></i>${esc(frag)}${a.note ? ' · 批注：' + esc(a.note) : ''} · 第 ${a.ch} 章</small></div>
               <button class="btn btn-ghost btn-sm btn-danger" data-action="annotation-del-global" data-id="${esc(bid)}" data-val="${i}">删除</button>
@@ -1390,7 +1397,7 @@
       <div class="setting-list">
         <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、卷签、划线批注、封面、设置与本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-backup">${icon('book')}<div class="st">从备份恢复<small>选择之前导出的 .json，会覆盖当前所有数据</small></div>${icon('right', 'ic-sm')}</div>
-        <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>把所有卷的笔记整理成一个 TXT，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>${noteFilterActive() ? '按「我的笔记」当前的搜索 / 按卷 / 颜色筛选导出' : '把所有卷的笔记整理成一个 TXT'}，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
     html += `<div class="section">${sectionHead('书源', '', '')}
       <div class="setting-list">
@@ -1805,9 +1812,11 @@
   function applyNoteFilter() {
     const q = (ui.noteSearch || '').toLowerCase();
     const bk = ui.noteBook || '';
+    const col = ui.noteColor || '';
     let shown = 0;
     $$('[data-note-item]').forEach((el) => {
-      const hit = (!q || (el.dataset.noteSearch || '').includes(q)) && (!bk || el.dataset.noteBook === bk);
+      const hit = (!q || (el.dataset.noteSearch || '').includes(q)) && (!bk || el.dataset.noteBook === bk)
+        && (!col || (el.dataset.noteColor || 'red') === col);
       el.hidden = !hit;
       if (hit) shown += 1;
     });
@@ -1859,6 +1868,8 @@
     /* 笔记面板是开在阅读器里的，正文里的划线颜色要同步刷一下 */
     const cur = readerRoot.dataset.currentBook;
     if (cur) touched.filter((t) => t.bid === cur).forEach((t) => refreshHlParas(cur, t.a.ch, t.a.pi));
+    /* 正按颜色筛时，改完色这些条目已不属于当前筛选，收起勾选并重筛，避免列表与筛选条件自相矛盾 */
+    if (ui.noteColor) { ui.notePicked.clear(); rerender(); }
     toast('已改为' + NOTE_COLORS[col] + ' · ' + touched.length + ' 条');
   }
   function applyNoteBulkDelete() {
@@ -1885,12 +1896,31 @@
     rerender();
     toast('已删除 ' + n + ' 条笔记');
   }
-  /* 把散在各卷的划线/批注收成一个 TXT，方便留存或搬到别处 */
-  function exportAnnotations() {
-    const lines = ['墨卷 · 划线与批注', '导出时间：' + new Date().toLocaleString('zh-CN'), ''];
+  /* 把散在各卷的划线/批注收成一个 TXT，方便留存或搬到别处。
+     onlyFiltered：遵守「我的笔记」当前的搜索词 / 按卷 / 按颜色筛选，无筛选时即全量。 */
+  function notePassFilter(bid, a) {
+    const q = (ui.noteSearch || '').toLowerCase();
+    const b = getBook(bid);
+    const hay = (((b && b.title) || bid) + ' ' + a.text + ' ' + (a.note || '') + ' 第' + a.ch + '章').toLowerCase();
+    return (!q || hay.includes(q))
+      && (!ui.noteBook || ui.noteBook === bid)
+      && (!ui.noteColor || (a.color || 'red') === ui.noteColor);
+  }
+  function noteFilterActive() { return !!(ui.noteSearch || ui.noteBook || ui.noteColor); }
+  function exportAnnotations(onlyFiltered) {
+    const filtering = !!onlyFiltered && noteFilterActive();
+    const lines = ['墨卷 · 划线与批注', '导出时间：' + new Date().toLocaleString('zh-CN')];
+    if (filtering) {
+      const bits = [];
+      if (ui.noteSearch) bits.push('搜索「' + ui.noteSearch + '」');
+      if (ui.noteBook) bits.push('《' + (((getBook(ui.noteBook) || {}).title) || ui.noteBook) + '》');
+      if (ui.noteColor) bits.push(NOTE_COLORS[ui.noteColor] || '朱砂');
+      lines.push('筛选条件：' + bits.join(' · '));
+    }
+    lines.push('');
     let n = 0;
     Object.keys(state.annotations || {}).forEach((bid) => {
-      const list = annotationList(bid);
+      const list = annotationList(bid).filter((a) => (!filtering || notePassFilter(bid, a)));
       if (!list.length) return;
       const b = getBook(bid);
       lines.push('《' + ((b && b.title) || bid) + '》' + (b && b.author ? ' · ' + b.author : ''));
@@ -1904,9 +1934,10 @@
       });
       lines.push('');
     });
-    if (!n) { toast('还没有划线或批注'); return; }
+    if (!n) { toast(filtering ? '当前筛选下没有笔记' : '还没有划线或批注'); return; }
     toast(downloadText('墨卷笔记-' + today() + '.txt', lines.join('\n'))
-      ? '已导出 ' + n + ' 条笔记' : '导出失败，请检查浏览器下载权限');
+      ? (filtering ? '已导出筛选结果 ' + n + ' 条' : '已导出 ' + n + ' 条笔记')
+      : '导出失败，请检查浏览器下载权限');
   }
   let hlDraft = null;
   function hideHlPop() {
@@ -3303,6 +3334,9 @@
             `<button class="rs-pill ${state.settings.flipAnim === k ? 'active' : ''}" data-action="set-flipanim" data-val="${k}">${l}</button>`).join('')}
         </div></div>
         <div class="rs-row rate-inline"><label>朗读</label>${rateSliderHtml(state.settings.rate, '语速 · 按住圆点拖动')}</div>
+        <div class="rs-row"><label>存档</label><div class="rs-pills">
+          <button class="rs-pill" data-action="export-chapter">导出本章 TXT</button>
+        </div></div>
       </div>`;
     } else if (kind === 'notes') {
       /* 校勘记：竖排一列，字号比正文小一档，只在这里看，不占正文版面 */
@@ -3964,6 +3998,19 @@
         copyText(text).then((ok) => toast(ok ? '已复制本章正文' : '复制失败，请检查浏览器权限'));
         break;
       }
+      case 'export-chapter': {
+        const b = getBook(readerRoot.dataset.currentBook);
+        if (!b) break;
+        const ch = Number(readerRoot.dataset.currentCh) || 1;
+        const t = (chapterList(b)[ch - 1] || {}).title || ('第 ' + ch + ' 章');
+        const paras = paragraphs(b, ch - 1) || [];
+        if (!paras.length) { toast('这一章还没有正文'); break; }
+        const meta = ['《' + b.title + '》' + (b.author ? ' · ' + b.author : ''), t, '', '导出于 ' + new Date().toLocaleString('zh-CN'), ''];
+        const text = meta.concat(paras).join('\n') + '\n';
+        const safe = (b.title + '-' + t).replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 60);
+        toast(downloadText((safe || '墨卷-' + ch) + '.txt', text) ? '本章已导出为 TXT' : '导出失败，请检查浏览器下载权限');
+        break;
+      }
       case 'reader-settings': openPanel('settings'); break;
       case 'panel-close': closePanel(); break;
       case 'reader-search': openReaderSearch(); break;
@@ -4268,7 +4315,13 @@
         go('reader/' + id + '/' + m.ch);
         break;
       }
-      case 'export-annotations': exportAnnotations(); break;
+      case 'export-annotations': exportAnnotations(true); break;
+      case 'set-note-color': {
+        ui.noteColor = val === 'jade' || val === 'gold' || val === 'red' ? val : '';
+        $$('.note-color-row .chip').forEach((b) => b.classList.toggle('active', (b.dataset.val || '') === ui.noteColor));
+        applyNoteFilter();
+        break;
+      }
       case 'open-annotation': {
         const a = annotationList(id)[Number(val)];
         if (!a) { toast('笔记已不存在'); break; }

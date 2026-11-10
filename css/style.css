@@ -1083,6 +1083,9 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .hl-edit { gap: 6px; }
 .hl-edit .hl-note { left: auto; right: 0; }
 /* ---------- 笔记批量整理 ---------- */
+.note-color-row { margin: 9px 0 2px; }
+.note-color-row .chip:disabled { opacity: .38; cursor: default; }
+.note-color-row .chip:disabled:hover { color: var(--ink-2); border-color: var(--line); }
 .note-multi-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin: 8px 0 4px; padding: 8px 10px; border-radius: 9px;
