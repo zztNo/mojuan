@@ -812,6 +812,15 @@
       ${prog}
     </div>`;
   }
+  /* 搜索命中词高亮：只标第一处，先切片再逐段 esc，不做正则替换，天然防注入 */
+  function markText(s, q) {
+    const raw = String(s || '');
+    if (!q) return esc(raw);
+    const i = raw.toLowerCase().indexOf(String(q).toLowerCase());
+    if (i < 0) return esc(raw);
+    return esc(raw.slice(0, i)) + '<mark class="q-hit">' + esc(raw.slice(i, i + String(q).length))
+      + '</mark>' + esc(raw.slice(i + String(q).length));
+  }
   function bookRow(b, i, opts) {
     opts = opts || {};
     const picked = ui.selected.has(b.id);
@@ -824,10 +833,10 @@
       ${opts.rank ? `<div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>` : ''}
       <div style="width:62px;flex:none">${coverHtml(b)}</div>
       <div class="book-row-info">
-        <h3>${b.title} <span class="muted" style="font-size:11px;font-weight:400">/ ${b.author}</span></h3>
-        <p>${opts.hint ? `<b style="color:var(--cinnabar);font-weight:500">${esc(opts.hint)}</b> ` : ''}${b.desc}</p>
-        <div class="row-tags"><span class="tag tag-red">${b.status}</span><span class="tag">${b.category}</span>
-          <span class="tag">${b.words}</span><span class="tag">${chapNum(b)} 篇</span>${miniTags(b)}</div>
+        <h3>${markText(b.title, opts.mark)} <span class="muted" style="font-size:11px;font-weight:400">/ ${markText(b.author, opts.mark)}</span></h3>
+        <p>${opts.hint ? `<b style="color:var(--cinnabar);font-weight:500">${esc(opts.hint)}</b> ` : ''}${esc(b.desc)}</p>
+        <div class="row-tags"><span class="tag tag-red">${esc(b.status)}</span><span class="tag">${esc(b.category)}</span>
+          <span class="tag">${esc(b.words)}</span><span class="tag">${chapNum(b)} 篇</span>${miniTags(b)}</div>
       </div>
     </div>`;
   }
@@ -1131,7 +1140,7 @@
     }
     const list = searchMatch(q);
     box.innerHTML = `<div class="result-head">「${esc(q)}」· 找到 ${list.length} 卷</div>` +
-      (list.length ? `<div class="book-list">${list.map((b, i) => bookRow(b, i, { hint: searchHint(q, b) })).join('')}</div>`
+      (list.length ? `<div class="book-list">${list.map((b, i) => bookRow(b, i, { hint: searchHint(q, b), mark: q.trim() })).join('')}</div>`
         : `<div class="empty">${icon('search')}<p>没找到这一卷，换个词试试</p></div>`);
     a11ySweep(box);
   }
@@ -1238,6 +1247,30 @@
   }
 
   /* ---------- 页面：我的 ---------- */
+  /* ---------- 键盘捷径说明 ---------- */
+  function openShortcutHelp() {
+    let root = $('#shortcutHelp');
+    if (!root) { root = document.createElement('div'); root.id = 'shortcutHelp'; document.body.appendChild(root); }
+    const groups = [
+      ['随处可用', [['1 / 2 / 3', '书肆 / 藏卷 / 墨斋'], ['/', '去书肆搜卷'],
+        ['? 或 F1', '打开这份说明'], ['Esc', '关闭面板 / 清空搜索 / 收起听卷']]],
+      ['读墨时', [['← / PageUp', '上一页（滚动模式为上一章）'],
+        ['→ / PageDown / 空格', '下一页（滚动模式为下一章）'],
+        ['t', '打开听卷'], ['c', '目录 / 卷签 / 笔记'],
+        ['s', '字号与纸张设置'], ['n', '切换夜墨 / 日光'], ['Esc', '退出阅读器']]],
+      ['划词与笔记', [['选中一段文字', '浮出「划线 / 批注」工具条'],
+        ['Esc', '收起工具条 / 清空笔记搜索']]]
+    ];
+    root.innerHTML = `<div class="sh-backdrop" data-action="close-shortcut-help"></div>
+      <div class="sh-card" role="dialog" aria-label="键盘捷径说明">
+        <div class="sh-head"><b>键 盘 捷 径</b>
+          <button class="icon-btn" data-action="close-shortcut-help" title="关闭">${icon('close', 'ic-sm')}</button></div>
+        <div class="sh-body">${groups.map(([g, rows]) => `<div class="sh-group"><h4>${esc(g)}</h4>${rows.map(([k, d]) =>
+          `<div class="sh-row"><kbd>${esc(k)}</kbd><span>${esc(d)}</span></div>`).join('')}</div>`).join('')}</div>
+      </div>`;
+  }
+  function closeShortcutHelp() { const r = $('#shortcutHelp'); if (r) r.remove(); }
+
   function pageMe() {
     /* 开卷 = 有阅读记录的书（打开过就算）；读过篇目 = 每本读过的章数累加 */
     const opened = Object.keys(state.progress || {}).length;
@@ -1365,6 +1398,7 @@
         <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD，支持多选</small></div>${icon('right', 'ic-sm')}</div>
         ${state.localBooks.length ? `<div class="setting-row" data-action="go-local-list">${icon('trash')}<div class="st">整理 / 删除已导入的卷<small>已导入 ${state.localBooks.length} 本，可单本删除；藏卷里长按卷册可批量理卷</small></div>${icon('right', 'ic-sm')}</div>` : ''}
         <div class="setting-row" data-action="go-shelf">${icon('shelf')}<div class="st">管理我的藏卷</div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="open-shortcut-help">${icon('settings')}<div class="st">键盘捷径<small>按 ? 随时打开，桌面上读墨更快</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="reset-data">${icon('trash')}<div class="st">清空本地读墨数据<small>藏卷、进度与设置将恢复初始状态</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
     html += `<div class="about-line">墨卷 MO JUAN · 一卷在手，人间可读<br>公版典藏 · 全文离线内置 · 书源可扩展</div>`;
@@ -3166,6 +3200,7 @@
             `<li class="${i + 1 === cur ? 'active' : ''}" data-action="catalog-goto" data-ch="${i + 1}">${esc(c.title)}<small>${i + 1}</small></li>`).join('')}</ul>
           <div class="cat-nav">
             <button class="btn btn-ghost btn-sm" data-action="reader-prev" ${cur <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
+            <button class="btn btn-ghost btn-sm" data-action="copy-chapter" title="复制本章正文">${icon('brush', 'ic-sm')} 复制本章</button>
             <button class="btn btn-ghost btn-sm" data-action="reader-next" ${cur >= chs.length ? 'disabled' : ''}>下一章 ${icon('right', 'ic-sm')}</button>
           </div>`
         : kind === 'annotation' ? annotationHtml(b)
@@ -3586,6 +3621,8 @@
       }
       case 'set-shelf-filter': ui.shelfFilter = val; rerender(); break;
       case 'set-shelf-sort': ui.shelfSort = val; rerender(); break;
+      case 'open-shortcut-help': openShortcutHelp(); break;
+      case 'close-shortcut-help': closeShortcutHelp(); break;
       case 'clear-shelf-search': {
         const inp = $('#shelfSearch');
         if (inp) { inp.value = ''; inp.focus(); }
@@ -3770,6 +3807,18 @@
         if (history.length > 1) history.back(); else go('book/' + readerRoot.dataset.currentBook);
         break;
       case 'reader-catalog': openPanel('catalog'); break;
+      case 'copy-chapter': {
+        const b = getBook(readerRoot.dataset.currentBook);
+        if (!b) break;
+        const ch = Number(readerRoot.dataset.currentCh) || 1;
+        const t = (chapterList(b)[ch - 1] || {}).title || ('第 ' + ch + ' 章');
+        const paras = paragraphs(b, ch - 1) || [];
+        if (!paras.length) { toast('这一章还没有正文'); break; }
+        const text = '《' + b.title + '》 ' + (b.author || '') + '\n' + t + '\n\n' + paras.join('\n\n');
+        closePanel();
+        copyText(text).then((ok) => toast(ok ? '已复制本章正文' : '复制失败，请检查浏览器权限'));
+        break;
+      }
       case 'reader-settings': openPanel('settings'); break;
       case 'panel-close': closePanel(); break;
       case 'reader-search': openReaderSearch(); break;
@@ -4108,6 +4157,7 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if ($('#shortcutHelp')) { closeShortcutHelp(); return; }
       /* 焦点在藏卷搜索框里时，Esc 只清空搜索，不去动听书或阅读器 */
       const si = $('#shelfSearch');
       if (si && si.value && document.activeElement === si) {
@@ -4130,6 +4180,11 @@
         return;
       }
     }
+    if (e.key === '?' || e.key === 'F1') {
+      if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+      e.preventDefault(); openShortcutHelp(); return;
+    }
+    if ($('#shortcutHelp')) return; /* 说明浮层是模态，开着时吞掉其它键 */
     /* div/li 补成按钮之后，回车与空格还得能真的按下去 */
     const act = document.activeElement;
     if (act && !NATIVE_CTL.test(act.tagName) && act.dataset && act.dataset.action
@@ -4141,6 +4196,17 @@
     const inReader = !!readerRoot.dataset.currentBook;
     if (inReader && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
     if (inReader) {
+      const panelOpen = ($('#readerPanel') && !$('#readerPanel').hidden)
+        || ($('#catalogDrawer') && !$('#catalogDrawer').hidden);
+      if (!panelOpen) {
+        const k = (e.key || '').toLowerCase();
+        const map = { t: '#ttsBtn', c: '[data-action="reader-catalog"]', s: '[data-action="reader-settings"]', n: '#themeBtn' };
+        if (map[k]) {
+          const btn = document.querySelector(map[k]);
+          if (btn) { e.preventDefault(); btn.click(); }
+          return;
+        }
+      }
       const paging = state.settings.pageMode === 'flip' && $('#reader');
       if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         paging ? flipBy(-1) : switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1);
@@ -4150,6 +4216,10 @@
         paging ? flipBy(1) : switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1);
       }
       return;
+    }
+    if (!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
+      const nav = { '1': 'store', '2': 'shelf', '3': 'me' }[e.key];
+      if (nav) { e.preventDefault(); go(nav); return; }
     }
     if (e.key === '/' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); go('search'); }
     if (e.key === 'Enter' && document.activeElement.id === 'searchInput') {

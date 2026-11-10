@@ -1078,6 +1078,23 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .ann-dot.hl-jade { background: var(--jade); }
 .ann-dot.hl-gold { background: var(--gold); }
 .note-book-filter { max-width: 132px; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; }
+/* ---------- 书城搜索命中高亮 ---------- */
+.q-hit { background: color-mix(in srgb, var(--cinnabar) 20%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* ---------- 键盘捷径说明 ---------- */
+#shortcutHelp { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; }
+.sh-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .42); }
+.sh-card {
+  position: relative; width: min(420px, calc(100vw - 32px)); max-height: 80vh; overflow: auto;
+  background: var(--paper-2); border-radius: 14px; box-shadow: var(--shadow); color: var(--ink);
+}
+.sh-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
+  border-bottom: 1px solid var(--line); font-family: var(--font-serif); letter-spacing: .12em; }
+.sh-body { padding: 2px 18px 18px; }
+.sh-group h4 { margin: 15px 0 8px; font-size: 11.5px; letter-spacing: .14em; color: var(--ink-3); font-weight: 600; }
+.sh-row { display: flex; align-items: center; gap: 12px; padding: 5px 0; font-size: 12.5px; }
+.sh-row kbd { flex: none; min-width: 108px; padding: 3px 7px; border: 1px solid var(--line);
+  border-bottom-width: 2px; border-radius: 5px; background: var(--paper);
+  font: inherit; font-size: 11.5px; text-align: center; color: var(--ink-2); }
 .mini-tag {
   margin-left: 5px; padding: 0 4px; border-radius: 4px; white-space: nowrap;
   font-size: 10px; color: var(--jade); border: 1px solid var(--line);
