@@ -258,6 +258,9 @@
     bookmarks: {},
     annotations: {},
     listenScope: 'book',
+    /* 听书续听位置单独存句子下标，别再和阅读进度 progress.pct 混用：
+       后者在滚动模式是 scrollTop 比例、翻页模式是页码比例，不是字符进度。 */
+    listenPos: {},
     pinned: [],
     bookTags: {}
   };
@@ -312,6 +315,7 @@
         bookmarks: Object.assign({}, DEFAULTS.bookmarks, (raw || {}).bookmarks || {}),
         annotations: Object.assign({}, DEFAULTS.annotations, (raw || {}).annotations || {}),
         bookTags: Object.assign({}, DEFAULTS.bookTags, (raw || {}).bookTags || {}),
+        listenPos: Object.assign({}, DEFAULTS.listenPos, (raw || {}).listenPos || {}),
         pinned: Array.isArray((raw || {}).pinned) ? raw.pinned : [],
         readLog: Object.assign({}, DEFAULTS.readLog, (raw || {}).readLog || {})
       });
@@ -1740,16 +1744,18 @@
       while (rest.length) {
         const avail = H - used;
         if (avail < 30) { flush(); continue; }
-        let lo = 1, hi = rest.length, best = 0;
+        let lo = 1, hi = rest.length, best = 0, bestH = 0;
         while (lo <= hi) {
           const mid = (lo + hi) >> 1;
-          if (measure('p', rest.slice(0, mid), first) <= avail) { best = mid; lo = mid + 1; }
+          const h = measure('p', rest.slice(0, mid), first);
+          if (h <= avail) { best = mid; bestH = h; lo = mid + 1; }
           else hi = mid - 1;
         }
         if (!best) best = Math.min(rest.length, 20);
         const chunk = rest.slice(0, best);
         cur.push({ text: chunk, type: 'p', indent: first, idx: it.idx });
-        used += measure('p', chunk, first);
+        /* bestH 就是 rest.slice(0, best) 的高度，二分里已经量过，省掉一次强制布局 */
+        used += bestH || measure('p', chunk, first);
         rest = rest.slice(best);
         first = false;
         if (rest.length) flush();
@@ -1759,6 +1765,28 @@
     m.remove();
     return pages.length ? pages : [[{ text: '（本章暂无内容）', type: 'p', indent: false }]];
   }
+  /* 分页结果缓存：同一章在同一排版参数下会被反复重算（调字号来回切、退出重进、
+     翻章回来、窗口 resize）。key 里带内容与排版签名，正文或样式一变自动失效。 */
+  const pageCache = new Map();
+  function flipSig(items) {
+    let len = 0, hash = 0;
+    for (let i = 0; i < items.length; i++) {
+      len += items[i].text.length;
+      hash = (hash * 31 + items[i].text.length + items[i].type.charCodeAt(0)) | 0;
+    }
+    return items.length + ':' + len + ':' + hash;
+  }
+  function paginateCached(items, W, H, bookId, ch) {
+    const st = state.settings;
+    const key = [bookId, ch, W, H, st.fs, st.lh, st.font, st.paper, flipSig(items)].join('|');
+    const hit = pageCache.get(key);
+    if (hit) return hit;
+    const pages = paginate(items, W, H);
+    if (pageCache.size >= 24) pageCache.clear(); /* 长卷别把内存吃住 */
+    pageCache.set(key, pages);
+    return pages;
+  }
+
   /* 一页的内容。翻页动画要同时摆两页，所以抽出来给「当前页」和「旁边那页」共用 */
   function pageInner(pos) {
     const page = flipState.pages[pos];
@@ -2728,14 +2756,16 @@
     listen.sents.forEach((s, k) => { if (s.start <= idx) { i = s.para; } });
     return i;
   }
-  /* 上次听到哪一句：同章、进度未到尾巴才续，否则从头 */
+  /* 上次听到哪一句：只认听书自己存的句子下标。
+     以前拿 state.progress.pct 乘正文长度来估字符位置，但那个 pct 在滚动模式是
+     scrollTop 比例、翻页模式是页码比例，用户边听边翻两页再回来就漂到别处去了。 */
   function listenResumeIndex() {
-    const pr = state.progress[listen.bookId] || {};
-    if (pr.ch !== listen.ch || !pr.pct || pr.pct > 0.97 || !listen.sents.length) return 0;
-    const target = Math.floor(pr.pct * listen.text.length);
-    let i = 0;
-    listen.sents.forEach((s, k) => { if (s.start <= target) i = k; });
-    return i;
+    if (!listen.sents.length) return 0;
+    const pos = (state.listenPos || {})[listen.bookId];
+    if (!pos || pos.ch !== listen.ch) return 0;
+    const i = Math.max(0, Math.min(listen.sents.length - 1, Number(pos.sentIndex) || 0));
+    /* 听到尾巴就从头来，别停在最后一句反复念 */
+    return i > 0 && i < listen.sents.length - 1 ? i : 0;
   }
   function listenRenderDynamic() {
     if (!listen.active) return;
@@ -2819,11 +2849,12 @@
     if (listen.expanded) return;
     listenScrollToPara();
   }
-  /* 每句结束把进度落盘（节流），退出后再进来能接着听 */
-  function listenCommitProgress() {
+  /* 每句结束把进度落盘（节流），退出后再进来能接着听。
+     state.progress 仍跟着朗读走，方便「边听边读」；但续听只认 listenPos。 */
+  function listenCommitProgress(force) {
     if (!listen.active || !listen.text) return;
     const now = Date.now();
-    if (now - lastCommit < 1200) return;
+    if (!force && now - lastCommit < 1200) return;
     lastCommit = now;
     state.progress[listen.bookId] = {
       ch: listen.ch,
@@ -2831,6 +2862,10 @@
       updated: now
     };
     state.lastRead = listen.bookId;
+    if (!state.listenPos) state.listenPos = {};
+    state.listenPos[listen.bookId] = {
+      ch: listen.ch, sentIndex: listen.sentIndex, charIndex: listen.charIndex, updated: now
+    };
     save();
   }
   function listenRemoteOn() {
@@ -3142,6 +3177,7 @@
       if (!listen.active) return;
     }
     listenLoadText();
+    if (state.listenPos) delete state.listenPos[listen.bookId]; /* 换章从头听 */
     state.progress[listen.bookId] = { ch: listen.ch, pct: 0, updated: Date.now() };
     save();
     renderListen();
@@ -3443,7 +3479,7 @@
     try { if (speechOK()) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     clearTimeout(listenTimer); clearInterval(listenTick);
     listenDropAudio();
-    listenCommitProgress();
+    listenCommitProgress(true); /* 强制补上最后一句，别被 1.2s 节流吃掉 */
     listen.active = false; listen.playing = false; listen.expanded = true;
     listen.timerMin = 0; listen.timerAt = 0;
     listenMediaSession(false);
@@ -3525,7 +3561,7 @@
     /* 用「当前页第一个字在全章的偏移」当锚点。字号一变页数全变，
        按页码比例定位会漂到别处，按字数锚点能稳稳停在原来读到的那句话上。 */
     const anchor = flipCharOffset(flipState.pages, flipState.page);
-    const pages = paginate(flipItems(b, flipState.ch), W, H);
+    const pages = paginateCached(flipItems(b, flipState.ch), W, H, b.id, flipState.ch);
     flipState.pages = pages;
     flipState.page = flipPageAtOffset(pages, anchor);
     renderFlipPage('');
@@ -3610,7 +3646,7 @@
       const fp = $('#flipPage'); if (!fp) return;
       const W = fp.clientWidth, H = fp.clientHeight;
       if (W < 60 || H < 80) return;
-      const pages = paginate(flipItems(b, ch), W, H);
+      const pages = paginateCached(flipItems(b, ch), W, H, b.id, ch);
       let page = 0;
       if (ui.flipHint === 'last') page = pages.length - 1;
       else if (pr && pr.ch === ch && pr.pct > 0) page = Math.min(pages.length - 1, Math.round(pr.pct * (pages.length - 1)));
@@ -3866,7 +3902,17 @@
     }
     /* 抽屉/设置面板一打开就把焦点送进去，键盘 Tab 才不会又跑回底下的正文 */
     const into = (drawer.hidden ? panel : drawer);
-    if (into && !into.hidden) { into.setAttribute('tabindex', '-1'); into.focus({ preventScroll: true }); }
+    if (into && !into.hidden) {
+      into.setAttribute('tabindex', '-1');
+      into.setAttribute('role', 'dialog');
+      into.setAttribute('aria-modal', 'true');
+      into.setAttribute('aria-label', kind === 'settings' ? '读墨设置'
+        : kind === 'notes' ? '校勘记' : '目录、卷签与笔记');
+      into.focus({ preventScroll: true });
+      /* 焦点直接落到第一个控件，键盘用户不用从容器开始一路 Tab */
+      const firstCtl = into.querySelector('button:not([disabled]), input:not([disabled])');
+      if (firstCtl) firstCtl.focus({ preventScroll: true });
+    }
     /* 面板盖上来时把检索条收起，免得压在抽屉/设置上 */
     syncSearchNav();
   }
@@ -3909,6 +3955,7 @@
   }
 
   /* ---------- 阅读器内文搜索：在本书已载入的章节里找词，点结果跳到命中段落 ---------- */
+  let searchAllToken = 0;
   function openReaderSearch() {
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
     cancelPanelClose();
@@ -3916,6 +3963,9 @@
     const mask = $('#readerMask'), d = $('#searchDrawer');
     if (!mask || !d) return;
     mask.hidden = false; d.hidden = false;
+    d.setAttribute('role', 'dialog'); d.setAttribute('aria-modal', 'true');
+    d.setAttribute('aria-label', '在《' + b.title + '》中检索');
+    d.setAttribute('tabindex', '-1');
     const rec = contentCache[b.id];
     const cached = (rec && rec.chapters ? rec.chapters.filter(Boolean).length : 0);
     const total = chapterList(b).length;
@@ -3929,6 +3979,7 @@
     if (inp) { inp.focus(); inp.addEventListener('input', () => runBookSearch(b, inp.value.trim())); }
   }
   function closeReaderSearch() {
+    searchAllToken += 1; /* 抽屉关了就别让后台继续拉章节 */
     const d = $('#searchDrawer');
     if (d && !d.hidden) mjExitDo(d, 'mj-out-right', () => { d.hidden = true; d.innerHTML = ''; });
     const mask = $('#readerMask');
@@ -4021,13 +4072,41 @@
     };
     once();
   }
+  function cancelSearchAll() {
+    searchAllToken += 1;
+    const b = getBook(readerRoot.dataset.currentBook);
+    const q = (($('#searchBox') || {}).value || '').trim();
+    if (b) runBookSearch(b, q); /* 取消后立刻给出「已载入部分」的结果 */
+    const hint = $('#searchHint');
+    if (hint) hint.innerHTML = '已取消 · 只检索已载入的章节 <button class="linklike" data-action="search-all">继续检索全书</button>';
+  }
   async function searchAll(b) {
     if (!b) return;
-    const box = $('#searchResults'); const hint = $('#searchHint');
-    if (box) box.innerHTML = '<div class="search-empty">正在联网载入全书章节…</div>';
+    const box = $('#searchResults'), hint = $('#searchHint');
     const total = chapterList(b).length;
-    for (let i = 1; i <= total; i++) { try { await ensureChapter(b, i); } catch (e) { /* 忽略单章失败 */ } }
-    const q = ($('#searchBox') || {}).value ? $('#searchBox').value.trim() : '';
+    const token = ++searchAllToken;
+    let done = 0;
+    const paint = () => {
+      if (token !== searchAllToken) return;
+      if (box) box.innerHTML = '<div class="search-empty">正在联网载入全书… <b>' + done + ' / ' + total
+        + '</b> 章<br><small>可继续输入关键词，或 <button class="linklike" data-action="search-all-cancel">取消检索</button></small></div>';
+      if (hint) hint.innerHTML = '已载入 ' + done + ' / ' + total + ' 章';
+    };
+    paint();
+    const queue = [];
+    for (let i = 1; i <= total; i++) queue.push(i);
+    const worker = async () => {
+      while (queue.length && token === searchAllToken) {
+        const i = queue.shift();
+        try { await ensureChapter(b, i); } catch (e) { /* 单章失败不打断其它章 */ }
+        done += 1;
+        if (done % 4 === 0 || done === total) paint();
+      }
+    };
+    /* 3 路并发：原来逐章串行，长卷最坏是 N × 单章超时；也别开太大把在线源打爆 */
+    await Promise.all(Array.from({ length: Math.min(3, total) }, worker));
+    if (token !== searchAllToken) return;
+    const q = (($('#searchBox') || {}).value || '').trim();
     runBookSearch(b, q);
     if (hint) hint.innerHTML = '已检索全部 ' + total + ' 章';
   }
@@ -4561,6 +4640,7 @@
       case 'search-nav-next': jumpSearchHit((ui.searchIdx || 0) + 1); break;
       case 'search-nav-close': closeSearchNav(); break;
       case 'search-all': searchAll(getBook(readerRoot.dataset.currentBook)); break;
+      case 'search-all-cancel': cancelSearchAll(); break;
       case 'reader-prev': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1); break;
       case 'reader-next': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1); break;
       case 'reader-retry': {
@@ -4977,6 +5057,21 @@
     if (e.target.id === 'noteBookFilter') { ui.noteBook = e.target.value; applyNoteFilter(); }
   });
   document.addEventListener('keydown', (e) => {
+    /* 模态面板打开时把 Tab 关在里面，别让焦点跑回底下的正文 */
+    if (e.key === 'Tab') {
+      const drawer = $('#catalogDrawer'), panel = $('#readerPanel'), sd = $('#searchDrawer');
+      const dlg = [drawer, panel, sd].find((el) => el && !el.hidden);
+      if (dlg) {
+        const f = Array.from(dlg.querySelectorAll(
+          'button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
+        )).filter((el) => !el.hidden && el.getClientRects().length);
+        if (f.length) {
+          const first = f[0], last = f[f.length - 1], cur = document.activeElement;
+          if (e.shiftKey && (cur === first || !dlg.contains(cur))) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && (cur === last || !dlg.contains(cur))) { e.preventDefault(); first.focus(); }
+        }
+      }
+    }
     if (e.key === 'Escape') {
       if ($('#shortcutHelp')) { closeShortcutHelp(); return; }
       /* 焦点在藏卷搜索框里时，Esc 只清空搜索，不去动听书或阅读器 */

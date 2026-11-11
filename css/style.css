@@ -1023,6 +1023,8 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 @keyframes flipPrev { from { transform: translateX(-100%); } to { transform: none; } }
 /* 测量层：与正式页同样的排版规则，但不占布局 */
 .flip-measure {
+  /* 把测量子树的布局与整页隔离：读 offsetHeight 时浏览器不必重排全文档 */
+  contain: layout style;
   position: absolute !important; left: -99999px; top: 0; visibility: hidden;
   height: auto !important; min-height: 0 !important; padding: 0 !important; margin: 0 !important;
   max-width: none !important; overflow: visible !important;

@@ -216,6 +216,109 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
     await ctx.close();
   }
 
+  /* ---------- 9. 分页缓存：同参数不再反复建测量 DOM ---------- */
+  {
+    const { ctx, p, errs } = await scene(browser, seeded({
+      settings: { pageMode: 'flip', flipAnim: 'realistic', fs: 24, lh: 2.8 }
+    }));
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    await p.waitForTimeout(350);
+    await p.evaluate(() => {
+      window.__mc = 0;
+      new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => {
+        if (n.nodeType === 1 && n.classList && n.classList.contains('flip-measure')) window.__mc++;
+      }))).observe(document.body, { childList: true });
+    });
+    const f0 = (await p.textContent('#flipFoot')).trim();
+    for (let i = 0; i < 3; i++) {
+      await p.evaluate(() => window.dispatchEvent(new Event('resize')));
+      await p.waitForTimeout(200);
+    }
+    const mc = await p.evaluate(() => window.__mc);
+    ok('同参数重复分页命中缓存', mc === 0, 'measure DOM created=' + mc);
+    ok('分页结果保持一致', (await p.textContent('#flipFoot')).trim() === f0);
+    await p.keyboard.press('s');
+    await p.waitForSelector('[data-action="set-font"][data-val="21"]', { timeout: 8000 });
+    await p.click('[data-action="set-font"][data-val="21"]');
+    await p.waitForTimeout(350);
+    ok('改字号后缓存失效并重新测量', (await p.evaluate(() => window.__mc)) === 1);
+    ok('分页优化无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
+  /* ---------- 10. 面板 dialog 语义与 Tab 焦点循环 ---------- */
+  {
+    const { ctx, p, errs } = await scene(browser, seeded());
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerPaper p[data-pi]', { timeout: 8000 });
+    await p.keyboard.press('s');
+    await p.waitForSelector('.reader-settings');
+    const a = await p.evaluate(() => {
+      const el = document.querySelector('#readerPanel');
+      return { role: el.getAttribute('role'), modal: el.getAttribute('aria-modal'),
+        label: el.getAttribute('aria-label'), inside: el.contains(document.activeElement) };
+    });
+    ok('设置面板具备 dialog 语义', a.role === 'dialog' && a.modal === 'true' && !!a.label, JSON.stringify(a));
+    ok('打开面板时焦点落在面板内', a.inside, JSON.stringify(a));
+    let outside = 0;
+    for (let i = 0; i < 24; i++) {
+      await p.keyboard.press('Tab');
+      if (!(await p.evaluate(() => document.querySelector('#readerPanel').contains(document.activeElement)))) outside++;
+    }
+    for (let i = 0; i < 6; i++) {
+      await p.keyboard.press('Shift+Tab');
+      if (!(await p.evaluate(() => document.querySelector('#readerPanel').contains(document.activeElement)))) outside++;
+    }
+    ok('Tab / Shift+Tab 焦点不会跑出面板', outside === 0, 'outside=' + outside);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(260);
+    await p.click('[data-action="reader-search"]');
+    await p.waitForSelector('#searchBox');
+    ok('检索抽屉也有 dialog 语义', await p.evaluate(() =>
+      document.querySelector('#searchDrawer').getAttribute('role') === 'dialog'));
+    ok('无障碍改动无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
+  /* ---------- 11. 全书检索改为并发且可取消（静态检查） ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('全书检索不再逐章串行', src.includes('Math.min(3, total)') && src.includes('Promise.all'));
+    ok('全书检索有取消入口与进度', src.includes('search-all-cancel') && src.includes("'已载入 ' + done"));
+  }
+
+  /* ---------- 12. 听书续听只认独立位置，不被阅读进度比例带偏 ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('续听不再拿 progress.pct 估算字符位置', !src.includes('pr.pct * listen.text.length'));
+    ok('听书位置独立落盘', src.includes('state.listenPos[listen.bookId]'));
+
+    const openListen = async (withPos, pct) => {
+      /* listenPos 是 state 里的字段，不是独立的 localStorage 键 */
+      const st = {
+        settings: { pageMode: 'scroll', flipAnim: 'realistic' },
+        progress: { shijing: { ch: 1, pct, updated: 1 } }
+      };
+      if (withPos) st.listenPos = { shijing: { ch: 1, sentIndex: 3, charIndex: 100, updated: 1 } };
+      const { ctx, p, errs } = await scene(browser, seeded(st));
+      await p.goto(FILE + '#/reader/shijing/1');
+      await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+      await p.click('#ttsBtn');
+      await p.waitForTimeout(750);
+      const t = (await p.textContent('#toast')) || '';
+      await ctx.close();
+      return { resumed: t.includes('接着上次'), toast: t, errs };
+    };
+    const a = await openListen(true, 0.01);
+    const b = await openListen(false, 0.9);
+    ok('有听书位置记录时接着上次听', a.resumed, JSON.stringify(a));
+    ok('阅读进度比例不会误触发续听', !b.resumed, JSON.stringify(b));
+    ok('听书改动无脚本报错', a.errs.filter((x) => x.startsWith('PAGEERROR')).length === 0
+      && b.errs.filter((x) => x.startsWith('PAGEERROR')).length === 0,
+      a.errs.concat(b.errs).join(' | '));
+  }
+
   await browser.close();
   console.log('\n数据安全 / 兼容专项：' + pass + ' PASS / ' + fail + ' FAIL');
   if (fail) process.exit(1);
