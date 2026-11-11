@@ -468,6 +468,10 @@ img, svg { display: block; }
 .setting-row .ic { color: var(--cinnabar); }
 .setting-row .st { flex: 1; font-size: 13.5px; }
 .setting-row .st small { display: block; color: var(--ink-3); font-size: 11px; }
+/* 只给读屏看的播报区：不占位、不参与布局，但保持可被辅助技术读取
+   （不能用 display:none / visibility:hidden，那两样会把内容一起藏掉） */
+.sr-announce { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 /* 存储告警：偏紧用泥金，写不进去用朱砂，只改小字与左侧描边，不动整行配色 */
 .setting-row.storage-tight .st small { color: var(--gold); }
 .setting-row.storage-full { box-shadow: inset 3px 0 0 var(--cinnabar); }

@@ -1814,6 +1814,7 @@
       </div>`;
     /* tabindex="-1"：抽屉关掉后焦点要能回到阅读器本身，否则会掉到 body（读屏会从头念） */
     return `<div class="reader mode-${flip ? 'flip' : 'scroll'}" id="reader" tabindex="-1" data-paper="${state.settings.paper}">
+      <div class="sr-announce" id="readerAnnounce" role="status" aria-live="polite" aria-atomic="true"></div>
       <div class="reader-top" id="readerTop">
         <button class="icon-btn" data-action="reader-back" title="返回">${icon('back')}</button>
         <div class="rt-title">${esc(b.title)}</div>
@@ -4010,6 +4011,24 @@
       syncBookmarkBtn();
     }
   }
+  /* 换章后给读屏一句提示：视觉上正文整块换掉了，焦点却还停在「下一章」按钮上，
+     读屏不播报的话用户根本不知道已经换到哪一章。只在章号真的变了时播
+     （同一章内翻页不打断），首次进卷交给 #reader 的聚焦播报。
+     顺手同步 document.title：多标签页 / 装成独立窗口之后，标题栏能看出在读哪一卷。 */
+  const APP_TITLE = '墨卷 · 一卷在手，人间可读';
+  function announceChapter(b, ch, prevCh) {
+    const cur = chapterList(b)[ch - 1];
+    const name = cur && cur.title ? String(cur.title) : '';
+    const rd = $('#reader');
+    if (rd) rd.setAttribute('aria-label', b.title + ' · 第 ' + ch + ' 章' + (name ? ' · ' + name : ''));
+    document.title = name ? b.title + ' · ' + name + ' · 墨卷' : b.title + ' · 墨卷';
+    if (prevCh == null || String(prevCh) === String(ch)) return;
+    const el = $('#readerAnnounce');
+    if (!el) return;
+    /* 同一句重复也要重播：先清空，下一拍再写，读屏才会重念 */
+    el.textContent = '';
+    setTimeout(() => { el.textContent = '已到第 ' + ch + ' 章' + (name ? '，' + name : ''); }, 30);
+  }
   async function showReader(id, ch) {
     const token = ++readerToken;
     let b = getBook(id);
@@ -4021,6 +4040,7 @@
     let flipMode = state.settings.pageMode === 'flip';
     const prevBook = readerRoot.dataset.currentBook;
     const prevMode = readerRoot.dataset.mode;
+    const prevCh = readerRoot.dataset.currentCh;
     /* 同一本书、同样是翻页模式时换章：只重算分页，不重建 DOM，省掉「正在分页」占位帧 */
     let canReuse = flipMode && prevBook === id && prevMode === 'flip' && !!$('#reader') && !!$('#flipPage');
     readerRoot.dataset.currentBook = id;
@@ -4088,6 +4108,7 @@
     ui.flipDir = '';
     if (canReuse) {
       document.body.style.overflow = 'hidden';
+      announceChapter(b, ch, prevBook === id ? prevCh : null);
       paginateAndRender(b, ch, token, dir);
       setTimeout(() => { if (token === readerToken) prefetchNext(b, ch); }, 0);
       return;
@@ -4095,6 +4116,7 @@
     document.body.style.overflow = 'hidden';
     readerRoot.innerHTML = readerHtml(b, ch);
     a11ySweep(readerRoot);
+    announceChapter(b, ch, prevBook === id ? prevCh : null);
     setBgInert(true);
     /* 刚进阅读器（不是换章）时把焦点交给正文，读屏才知道翻到了哪一卷 */
     if (!prevBook) {
@@ -4219,6 +4241,8 @@
     delete readerRoot.dataset.currentBook;
     delete readerRoot.dataset.currentCh;
     delete readerRoot.dataset.mode;
+    /* 标题跟着回到书肆，别让标签页一直停在「在读《某卷》第 N 章」 */
+    if (document.title !== APP_TITLE) document.title = APP_TITLE;
     document.body.style.overflow = '';
     setBgInert(false);
   }
@@ -4751,7 +4775,9 @@
         ids.forEach((x) => { delete state.covers[x].image; });
         const okSave = save();
         if (okSave) ui.storageFull = false;
-        render();
+        /* 这一行在墨斋页中部，直接 render() 会把页面滚回页首（按钮刚点完就被甩走）。
+           rerender() 会带上当前 scrollY，清完还留在原地，能接着看占用降了多少。 */
+        rerender();
         toast(okSave ? '已清理 ' + ids.length + ' 张封面图' : '封面图已清理，但空间仍然不够，建议导出备份后清理已导入的卷');
         break;
       }
@@ -5532,6 +5558,9 @@
     return shown;
   }
   document.addEventListener('input', (e) => {
+    /* 组词中的拼音串不是搜索词：拿 "guanju" 去过滤会闪一下「没找到」，
+       目录里还会把列表整个收起。等上屏（compositionend 后的那次 input）再搜。 */
+    if (e.isComposing) return;
     if (e.target.matches && e.target.matches('[data-rate-slider]')) {
       const r = clampRate(e.target.value);
       fillRateTrack(e.target);
@@ -5566,6 +5595,16 @@
       catalogSearchTimer = setTimeout(() => applyCatalogFilter(el), 120);
     }
   });
+  /* 输入法上屏后补一次过滤：Chrome 会在 compositionend 之后再补一个 input，
+     但部分安卓 WebView / 第三方输入法只发 compositionend，不补 input，
+     那样输完拼音就再也不会搜了。这里按「框 → 各自的过滤函数」兜一遍。 */
+  document.addEventListener('compositionend', (e) => {
+    const el = e.target, id = el && el.id;
+    if (id === 'searchInput') { clearTimeout(searchTimer); renderSearchBody(el.value); }
+    else if (id === 'shelfSearch') { clearTimeout(shelfSearchTimer); applyShelfSearch(el.value); }
+    else if (id === 'noteSearch') { clearTimeout(noteSearchTimer); ui.noteSearch = el.value; applyNoteFilter(); }
+    else if (id === 'catalogSearch') { clearTimeout(catalogSearchTimer); applyCatalogFilter(el); }
+  });
   /* 拖动松手才真正应用，避免播放中每移动一像素就重启朗读 */
   document.addEventListener('change', (e) => {
     if (e.target.matches && e.target.matches('[data-rate-slider]')) applyRate(e.target.value);
@@ -5574,6 +5613,10 @@
   document.addEventListener('keydown', (e) => {
     /* Alt+←、Ctrl+P 等系统/浏览器组合键一律不抢 */
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    /* 中文输入法组词期间（拼音还没上屏）按键不算数：Enter 是「选字上屏」，
+       空格是选词，方向键在候选框里走。这些键要是被当成「直达章节 / 翻页」，
+       字打不进去还会被弹到别的章。keyCode 229 是组词中按键的老写法，一并挡掉。 */
+    if (e.isComposing || e.keyCode === 229) return;
     /* 模态面板打开时把 Tab 关在里面，别让焦点跑回底下的正文。
        表单类弹窗（快捷键说明等）盖在最上层，优先圈在弹窗里。 */
     if (e.key === 'Tab') {

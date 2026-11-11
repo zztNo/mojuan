@@ -284,6 +284,46 @@ const newPage = async (browser, extra, errs) => {
     await p.keyboard.press('Enter');
     await p.waitForTimeout(700);
     ok('目录里回车直达第一条命中', (await p.evaluate(() => document.querySelector('#readerRoot').dataset.currentCh)) === '7');
+    /* 中文输入法组词期间的按键不能当命令：拼音串（guanju）不该拿去过滤，
+       Enter 是「选字上屏」，更不该把人弹到别的章去。上一步跳章已收起抽屉，重开一次。 */
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForSelector('#catalogSearch');
+    const ime = await p.evaluate(() => {
+      const inp = document.querySelector('#catalogSearch');
+      const all = document.querySelectorAll('#catalogList li').length;
+      inp.value = 'guanju';
+      inp.dispatchEvent(new InputEvent('input', { isComposing: true, bubbles: true }));
+      return new Promise((r) => setTimeout(() => {
+        const vis = Array.from(document.querySelectorAll('#catalogList li')).filter((x) => !x.hidden).length;
+        const ch = document.querySelector('#readerRoot').dataset.currentCh;
+        inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true }));
+        setTimeout(() => r({ all, vis, ch, ch2: document.querySelector('#readerRoot').dataset.currentCh,
+          open: !document.querySelector('#catalogDrawer').hidden }), 350);
+      }, 300));
+    });
+    ok('组词中的拼音不触发过滤', ime.vis === ime.all, JSON.stringify(ime));
+    ok('组词中按 Enter 不跳章', ime.ch === ime.ch2 && ime.open, JSON.stringify(ime));
+    await p.close();
+  }
+
+  /* ---------- G2. 换章：标签页标题与读屏播报 ---------- */
+  {
+    const p = await newPage(browser, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerAnnounce', { timeout: 8000 });
+    await p.waitForTimeout(600);
+    ok('进卷时标题带书名章名', /诗经/.test(await p.title()) && /关雎/.test(await p.title()));
+    ok('进卷时阅读器有 aria-label', /第 1 章/.test((await p.getAttribute('#reader', 'aria-label')) || ''));
+    ok('进卷时播报区是空的', !(await p.textContent('#readerAnnounce')));
+    const t0 = await p.title();
+    await p.evaluate(() => { const n = document.querySelector('[data-action="reader-step"][data-val="1"]'); if (n) n.click(); });
+    await p.waitForTimeout(1200);
+    ok('换章后标题跟着变', (await p.title()) !== t0 && /葛覃/.test(await p.title()), await p.title());
+    ok('换章后有读屏播报', /已到第 2 章/.test((await p.textContent('#readerAnnounce')) || ''));
+    ok('aria-label 跟着换章', /第 2 章/.test((await p.getAttribute('#reader', 'aria-label')) || ''));
+    await p.evaluate(() => { location.hash = '#/shelf'; });
+    await p.waitForTimeout(500);
+    ok('退出阅读器标题复原', /一卷在手/.test(await p.title()));
     await p.close();
   }
 
