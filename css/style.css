@@ -1634,3 +1634,9 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
   .listen-mini { bottom: calc(12px + env(safe-area-inset-bottom)); }
   .toast { bottom: calc(20px + env(safe-area-inset-bottom)); }
 }
+
+/* 目录动辄上千章（《资治通鉴》两千多），全量条目一起布局绘制会拖慢打开与滚动。
+   用 content-visibility 跳过视口外的渲染。这里的 intrinsic 值是「内容盒」高度，
+   不含 padding（11×2）与下边框（1），所以写 21px 才能让未渲染条目总高＝渲染后的 44px，
+   滚动条长度与「定位到当前章」的偏移才不会偏。 */
+.catalog-list li { content-visibility: auto; contain-intrinsic-height: 21px; }

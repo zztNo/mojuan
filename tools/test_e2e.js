@@ -108,6 +108,11 @@ const newPage = async (browser, extra, errs) => {
     await p.fill('#catalogSearch', '读');
     await p.waitForTimeout(220);
     ok('目录搜索只匹配章名', (await p.locator('#catalogList li:not([hidden])').count()) === 0);
+    ok('无命中时给出空态', !(await p.locator('#catNoMatch').isHidden()));
+    await p.fill('#catalogSearch', '');
+    await p.waitForTimeout(220);
+    ok('清空搜索后列表与空态一起复原',
+      (await p.locator('#catalogList li:not([hidden])').count()) > 0 && (await p.locator('#catNoMatch').isHidden()));
     await p.keyboard.press('Escape');
     await p.waitForTimeout(260);
     ok('Esc 收起目录抽屉而不是退出阅读器', (await p.locator('#catalogDrawer').isHidden())
@@ -233,6 +238,22 @@ const newPage = async (browser, extra, errs) => {
     await p.mouse.up();
     await p.waitForTimeout(400);
     ok('仿真拖动落定后图层收净', !(await st()).realistic && (await st()).adj);
+    await p.close();
+  }
+
+  /* ---------- G. 目录：回车直达命中 / 数字直达 ---------- */
+  {
+    const p = await newPage(browser, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('[data-action="reader-catalog"]', { timeout: 8000 });
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForSelector('#catalogList li');
+    /* 目录搜索框在阅读器里，焦点在输入框上时 Enter 不能被「输入框放行」那条吞掉 */
+    await p.fill('#catalogSearch', '7');
+    await p.focus('#catalogSearch');
+    await p.keyboard.press('Enter');
+    await p.waitForTimeout(700);
+    ok('目录里回车直达第一条命中', (await p.evaluate(() => document.querySelector('#readerRoot').dataset.currentCh)) === '7');
     await p.close();
   }
 

@@ -4058,6 +4058,7 @@
               <span class="cl-title">${esc(c.title)}</span>
               <small>${read ? '<i class="ch-read">读过</i>' : ''}${n ? `<i class="ch-note" title="${n} 条笔记">✎${n}</i>` : ''}${no}</small></li>`;
           }).join('')}</ul>
+          <div class="cat-empty" id="catNoMatch" hidden>没有匹配的章节<br><small>试试章名里的关键词，或直接输入第几章</small></div>
           <div class="cat-nav">
             <button class="btn btn-ghost btn-sm" data-action="reader-prev" ${cur <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
             <button class="btn btn-ghost btn-sm" data-action="copy-chapter" title="复制本章正文">${icon('brush', 'ic-sm')} 复制本章</button>
@@ -5234,6 +5235,36 @@
       if ($('#reader')) onReaderSelection();
     }, 20);
   });
+  /* 目录过滤：按章名匹配，或直接输入章号。走 DOM hidden、不重建列表，
+     输入焦点和滚动位置都稳；上千章也只跑一遍 forEach。 */
+  function applyCatalogFilter(input) {
+    const el = input || $('#catalogSearch');
+    if (!el) return 0;
+    const q = el.value.trim().toLowerCase();
+    const num = parseInt(q, 10);
+    let shown = 0;
+    $$('#catalogList li').forEach((li) => {
+      const liNum = parseInt(li.dataset.ch, 10);
+      /* 只比章名：li 里还挂着「读过 / ✎N / 序号」，混进来会让搜「读」命中一大片 */
+      const t = li.querySelector('.cl-title');
+      const name = (t ? t.textContent : li.textContent).toLowerCase();
+      const hit = !q || name.includes(q) || (!isNaN(num) && liNum === num);
+      li.hidden = !hit;
+      if (hit) shown += 1;
+    });
+    /* 一条不剩时把列表整体收起、让空态顶到搜索框下面，否则空列表还占着 flex 高度，
+       空态提示会被顶到抽屉最底部 */
+    const no = $('#catNoMatch');
+    const list = $('#catalogList');
+    const empty = !!q && shown === 0;
+    if (no) no.hidden = !empty;
+    if (list) {
+      list.hidden = empty;
+      /* 有关键词才回到顶部（结果从第一条看起）；清空搜索时保留原滚动位置 */
+      if (q) list.scrollTop = 0;
+    }
+    return shown;
+  }
   document.addEventListener('input', (e) => {
     if (e.target.matches && e.target.matches('[data-rate-slider]')) {
       const r = clampRate(e.target.value);
@@ -5266,18 +5297,7 @@
       /* 长篇在线书目录上千条，逐键遍历全部 <li> 会卡，轻量防抖：停输 120ms 才过滤 */
       clearTimeout(catalogSearchTimer);
       const el = e.target;
-      catalogSearchTimer = setTimeout(() => {
-        const q = el.value.trim().toLowerCase();
-        const num = parseInt(q, 10);
-        $$('#catalogList li').forEach((li) => {
-          const liNum = parseInt(li.dataset.ch, 10);
-          /* 只比章名：li 里还挂着「读过 / ✎N / 序号」，混进来会让搜「读」命中一大片 */
-          const t = li.querySelector('.cl-title');
-          const name = (t ? t.textContent : li.textContent).toLowerCase();
-          const hit = !q || name.includes(q) || (!isNaN(num) && liNum === num);
-          li.hidden = !hit;
-        });
-      }, 120);
+      catalogSearchTimer = setTimeout(() => applyCatalogFilter(el), 120);
     }
   });
   /* 拖动松手才真正应用，避免播放中每移动一像素就重启朗读 */
@@ -5314,6 +5334,7 @@
       if (ni && ni.value && document.activeElement === ni) {
         e.preventDefault(); ni.value = ''; ui.noteSearch = ''; applyNoteFilter(); return;
       }
+      /* 目录搜索框里的 Esc 保持「收抽屉」：抽屉是模态面板，用户按 Esc 就是要关掉它 */
       if ($('#hlPop') && !$('#hlPop').hidden) { hideHlPop(); return; }
       if ($('#hlEdit') && !$('#hlEdit').hidden) { hideHlEdit(); return; }
       if (ui.noteMulti) { ui.noteMulti = false; ui.notePicked.clear(); rerender(); return; }
@@ -5345,6 +5366,16 @@
       && act.getAttribute('role') === 'button' && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) {
       e.preventDefault();
       act.click();
+      return;
+    }
+    /* 目录里搜完按回车直接进第一条命中；先同步跑一遍过滤，别被 120ms 防抖拖住。
+       必须放在「阅读器里焦点在输入框就放行」那条之前，否则永远走不到。 */
+    if (e.key === 'Enter' && document.activeElement.id === 'catalogSearch') {
+      e.preventDefault();
+      clearTimeout(catalogSearchTimer);
+      applyCatalogFilter(document.activeElement);
+      const first = $$('#catalogList li').find((li) => !li.hidden);
+      if (first) first.click();
       return;
     }
     const inReader = !!readerRoot.dataset.currentBook;
