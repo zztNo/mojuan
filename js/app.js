@@ -386,6 +386,29 @@
     const t = $('#toast'); t.textContent = msg; t.classList.add('show');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1900);
   }
+
+  /* 退场过渡：先播一小段动画再真正隐藏 / 清空；期间可以取消（比如立刻又点开面板） */
+  const mjExit = new Map();
+  function mjExitDo(el, cls, done) {
+    if (!el || el.hidden) { if (done) done(); return; }
+    mjExitCancel(el);
+    el.classList.add(cls);
+    const t = setTimeout(() => {
+      mjExit.delete(el); el.classList.remove(cls);
+      if (done) done();
+    }, 180);
+    mjExit.set(el, { t, cls });
+  }
+  function mjExitCancel(el) {
+    const old = el && mjExit.get(el);
+    if (!old) return;
+    clearTimeout(old.t); el.classList.remove(old.cls); mjExit.delete(el);
+  }
+  let panelCloseTimer = 0;
+  function cancelPanelClose() {
+    if (panelCloseTimer) { clearTimeout(panelCloseTimer); panelCloseTimer = 0; }
+    ['#readerMask', '#readerPanel', '#catalogDrawer'].forEach((sel) => mjExitCancel($(sel)));
+  }
   const COVER_MOTIFS = D.MOTIFS || [
     ['mountain', '远山'], ['bamboo', '青竹'], ['cloud', '云纹'], ['wave', '潮纹'],
     ['city', '楼阁'], ['star', '星轨'], ['flower', '梅枝'], ['sword', '剑气']
@@ -1287,6 +1310,7 @@
   function openShortcutHelp() {
     let root = $('#shortcutHelp');
     if (!root) { root = document.createElement('div'); root.id = 'shortcutHelp'; document.body.appendChild(root); }
+    mjExitCancel(root);
     const groups = [
       ['随处可用', [['1 / 2 / 3', '书肆 / 藏卷 / 墨斋'], ['/', '去书肆搜卷'],
         ['? 或 F1', '打开这份说明'], ['Esc', '关闭面板 / 清空搜索 / 收起听卷']]],
@@ -1305,7 +1329,10 @@
           `<div class="sh-row"><kbd>${esc(k)}</kbd><span>${esc(d)}</span></div>`).join('')}</div>`).join('')}</div>
       </div>`;
   }
-  function closeShortcutHelp() { const r = $('#shortcutHelp'); if (r) r.remove(); }
+  function closeShortcutHelp() {
+    const r = $('#shortcutHelp');
+    if (r) mjExitDo(r, 'mj-fade-out', () => r.remove());
+  }
 
   function pageMe() {
     /* 开卷 = 有阅读记录的书（打开过就算）；读过篇目 = 每本读过的章数累加 */
@@ -1486,8 +1513,10 @@
           </div>`;
     const bodyInner = flip
       ? `<div class="reader-paper flip-paper" id="readerPaper">
-          <div class="flip-page" id="flipPage"><div class="reader-loading">正 在 分 页 …</div></div>
           <div class="flip-page flip-adj" id="flipAdj" hidden aria-hidden="true"></div>
+          <div class="flip-page" id="flipPage"><div class="reader-loading">正 在 分 页 …</div></div>
+          <div class="flip-page flip-back" id="flipBack" hidden aria-hidden="true"></div>
+          <div class="flip-shade" id="flipShade" hidden aria-hidden="true"></div>
           <div class="flip-foot" id="flipFoot">—</div>
         </div>`
       : `<div class="reader-paper" id="readerPaper">
@@ -1701,8 +1730,8 @@
     if (!dir) return;
     /* 换章时没有「上一页」可摆，就让新章从翻过去的那一侧滑进来，衔接上翻页的手感 */
     void fp.offsetWidth;
-    if (state.settings.flipAnim === 'fade') fp.classList.add('anim-fade-' + dir);
-    else if (state.settings.flipAnim === 'slide') fp.classList.add('anim-slide-' + dir);
+    if (animMode() === 'fade' || animMode() === 'realistic') fp.classList.add('anim-fade-' + dir);
+    else if (animMode() === 'slide') fp.classList.add('anim-slide-' + dir);
   }
 
   /* ---------- 翻页动画：整页滑动 ---------- */
@@ -1765,9 +1794,119 @@
       else toast('已经是最后一页了');
       return;
     }
-    if (state.settings.flipAnim === 'slide' && flipSlide(delta)) return;
+    if (animMode() === 'slide' && flipSlide(delta)) return;
+    if (animMode() === 'realistic' && flipRealistic(delta)) return;
     fs.page = np;
-    renderFlipPage(state.settings.flipAnim === 'fade' ? (delta > 0 ? 'next' : 'prev') : '');
+    renderFlipPage(animMode() === 'fade' ? (delta > 0 ? 'next' : 'prev') : '');
+  }
+
+  /* ---------- 仿真翻页：当前页就是一张纸，绕左侧书脊翻过去 ----------
+     正面 #flipPage、背面 #flipBack 各转一个方向，靠 backface-visibility 决定谁可见；
+     底下 #flipAdj 是翻过去之后露出的那一页，#flipShade 是书脊阴影 + 纸面受光。 */
+  const REAL_3D_OK = (() => {
+    try { return !!(window.CSS && CSS.supports && CSS.supports('backface-visibility', 'hidden')
+      && CSS.supports('perspective', '1000px')); } catch (_) { return false; }
+  })();
+  function animMode() {
+    const a = state.settings.flipAnim;
+    /* 老 WebView 撑不起 3D：静默退回整页滑动，别让翻页直接失效 */
+    return a === 'realistic' && !REAL_3D_OK ? 'slide' : a;
+  }
+  function realLayers() {
+    const paper = $('#readerPaper'), fp = $('#flipPage'), back = $('#flipBack'),
+      adj = $('#flipAdj'), shade = $('#flipShade');
+    return (paper && fp && back && adj && shade) ? { paper, fp, back, adj, shade } : null;
+  }
+  function realPose(dir, p) {
+    /* 只掀到 90°：书脊在屏幕左缘，翻过 90° 纸就整个跑到屏幕外了，
+       而且背面的反印字会和底下那页的文字叠成双重曝光。让纸立起来、
+       底下的新页从右边一点点露出来，才是单栏全宽版式里最像真书的翻法。
+       往前翻则从立起的 -90° 放平到 0°，把上一页盖回来。 */
+    const q = Math.min(1, Math.max(0, p));
+    /* 正角 = 纸向后（远离眼睛）掀起，右缘往书脊收缩；
+       负角会把纸朝观察者翻、被透视放大，文字会挤成一条，方向是反的。 */
+    const ang = dir > 0 ? 90 * q : 90 - 90 * q;
+    return {
+      fp: 'rotateY(' + ang.toFixed(2) + 'deg)',
+      /* 纸全程不透明：一旦给它做淡出插值，中途就会变成半透明，
+         底下那页的字会透上来，两页文字叠成双重曝光。立到 90° 时
+         纸本身已被透视压成一条线，看不见，不需要再淡。 */
+      shade: 0.42 * Math.sin(Math.PI * q)
+    };
+  }
+  function realAt(L, dir, p) {
+    const q = realPose(dir, p);
+    L.fp.style.transform = q.fp;
+    L.shade.style.opacity = String(q.shade);
+  }
+  function realPrepare(pos, dir) {
+    const L = realLayers(); if (!L) return null;
+    const cur = flipState.page;
+    /* 往后翻：底下摆目标页，正面（当前页）翻走后露出来；
+       往前翻：底下摆当前页，正面换成目标页，从书脊翻回来盖住。 */
+    L.adj.innerHTML = pageInner(dir > 0 ? pos : cur);
+    L.fp.innerHTML = pageInner(dir > 0 ? cur : pos);
+    L.adj.hidden = false; L.shade.hidden = false;
+    L.back.hidden = true; L.back.innerHTML = '';
+    L.adj.style.transform = '';
+    L.paper.classList.add('realistic');
+    realAt(L, dir, 0);
+    return L;
+  }
+  function realClear() {
+    const L = realLayers(); if (!L) return;
+    L.paper.classList.remove('realistic');
+    L.fp.style.transform = ''; L.fp.style.opacity = '';
+    L.back.style.transform = ''; L.back.style.opacity = '';
+    L.back.hidden = true; L.back.innerHTML = '';
+    L.shade.hidden = true; L.shade.style.opacity = '0';
+    clearAdj();
+  }
+  /* 三个图层同步播一段 3D 动画；onfinish 不靠谱时用定时器兜底 */
+  function realAnimate(L, dir, p0, p1, dur, done) {
+    if (typeof L.fp.animate !== 'function') { done(); return; }
+    const poses = [p0, (p0 + p1) / 2, p1].map((p) => realPose(dir, p));
+    const opt = { duration: dur, easing: FLIP_EASE, fill: 'both' };
+    const kf = (extra) => poses.map((q, i) => Object.assign({ offset: i / 2 }, extra(q)));
+    const a1 = L.fp.animate(kf((q) => ({ transform: q.fp })), opt);
+    const a2 = L.shade.animate(kf((q) => ({ opacity: q.shade })), opt);
+    let ended = false;
+    const finish = () => {
+      if (ended) return; ended = true;
+      a1.cancel(); a2.cancel();
+      done();
+    };
+    a1.onfinish = finish;
+    setTimeout(finish, dur + 120);
+  }
+  function flipRealistic(delta) {
+    const L0 = realLayers(); if (!L0 || flipBusy) return false;
+    const np = flipState.page + delta;
+    if (np < 0 || np >= flipState.pages.length) return false;
+    if (typeof L0.fp.animate !== 'function' || !REAL_3D_OK) return false;
+    const L = realPrepare(np, delta); if (!L) return false;
+    flipBusy = true;
+    realAnimate(L, delta, 0, 1, 300, () => {
+      flipBusy = false;
+      commitPage(np);
+      realClear();
+    });
+    return true;
+  }
+  function realDragSettle(dir, dx, W, done) {
+    const L = realLayers(); if (!L) return;
+    const target = flipState.page + dir;
+    const go = done && target >= 0 && target < flipState.pages.length;
+    const p0 = Math.max(0, Math.min(1, (-dx * dir) / W));
+    if (typeof L.fp.animate !== 'function') {
+      realClear(); if (go) commitPage(target); return;
+    }
+    flipBusy = true;
+    realAnimate(L, dir, p0, go ? 1 : 0, go ? 220 : 180, () => {
+      flipBusy = false;
+      if (go) commitPage(target);
+      realClear();
+    });
   }
   /* 跟手翻页：手指压住往左/右推，两页跟着走；松手看「推得够远 / 甩得够快」决定翻过去还是弹回。
      这样按住后左右摆动也有连续反馈，而不是甩完才知道翻没翻。 */
@@ -1777,6 +1916,11 @@
     const paint = () => {
       raf = 0;
       if (!d || !d.active) return;
+      if (d.mode === 'real') {
+        const L = realLayers(); if (!L) return;
+        realAt(L, d.dir, Math.max(0, Math.min(1, (-d.pend * d.dir) / d.W)));
+        return;
+      }
       const fp = $('#flipPage'), adj = $('#flipAdj');
       if (fp) fp.style.transform = 'translate3d(' + d.pend + 'px,0,0)';
       if (adj) adj.style.transform = 'translate3d(' + (d.dir * d.W + d.pend) + 'px,0,0)';
@@ -1806,7 +1950,9 @@
         /* 到头了：这次不跟手，但留着 d 好把松手那下 click 压掉 */
         if (!fp || !adj || np < 0 || np >= flipState.pages.length) { d.dead = true; return; }
         d.W = fp.clientWidth || 1;
-        ensureAdj(np, dir, d.W);
+        d.mode = animMode() === 'realistic' && REAL_3D_OK && typeof fp.animate === 'function' ? 'real' : 'slide';
+        if (d.mode === 'real') realPrepare(np, dir);
+        else ensureAdj(np, dir, d.W);
         d.dir = dir; d.lock = true; d.active = true;
         ui.flipSwiped = true;
         body.classList.add('flip-dragging');
@@ -1817,7 +1963,8 @@
       const npWant = flipState.page + want;
       if (want !== d.dir && Math.abs(ev.clientX - d.x) > 20 && npWant >= 0 && npWant < flipState.pages.length) {
         d.dir = want;
-        ensureAdj(npWant, want, d.W);
+        if (d.mode === 'real') realPrepare(npWant, want);
+        else ensureAdj(npWant, want, d.W);
       }
       const now = performance.now(), dt = now - d.lastT;
       if (dt > 0) d.v = (ev.clientX - d.lastX) / dt;
@@ -1852,6 +1999,7 @@
   }
   /* 松手后的收尾：翻过去或弹回来，200ms 左右，不拖沓 */
   function flipDragSettle(dir, dx, W, done) {
+    if (animMode() === 'realistic' && REAL_3D_OK) return realDragSettle(dir, dx, W, done);
     const fp = $('#flipPage'), adj = $('#flipAdj');
     if (!fp || !adj) return;
     const target = flipState.page + dir;
@@ -3547,6 +3695,7 @@
     setBgInert(false);
   }
   function openPanel(kind) {
+    cancelPanelClose();
     hideHlPop();
     hideHlEdit();
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
@@ -3570,7 +3719,7 @@
           <button class="rs-pill ${state.settings.pageMode === 'scroll' ? 'active' : ''}" data-action="set-pagemode" data-val="scroll">上下滚动</button>
         </div></div>
         <div class="rs-row"><label>翻页</label><div class="rs-pills">
-          ${[['slide', '滑动'], ['fade', '淡入'], ['none', '无动画']].map(([k, l]) =>
+          ${[['slide', '滑动'], ['realistic', '仿真'], ['fade', '淡入'], ['none', '无动画']].map(([k, l]) =>
             `<button class="rs-pill ${state.settings.flipAnim === k ? 'active' : ''}" data-action="set-flipanim" data-val="${k}">${l}</button>`).join('')}
         </div></div>
         <div class="rs-row rate-inline"><label>朗读</label>${rateSliderHtml(state.settings.rate, '语速 · 按住圆点拖动')}</div>
@@ -3661,15 +3810,28 @@
   function closePanel() {
     hideHlEdit();
     ui.bmNote = -1;
+    cancelPanelClose();
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
     const hadFocus = document.activeElement && (document.activeElement === panel || document.activeElement === drawer
       || (panel && panel.contains(document.activeElement)) || (drawer && drawer.contains(document.activeElement)));
-    if (mask) mask.hidden = true;
-    if (panel) { panel.hidden = true; panel.innerHTML = ''; }
-    if (drawer) { drawer.hidden = true; drawer.innerHTML = ''; }
-    /* 面板里的元素被清掉了，焦点不能就这么掉在地上 */
+    const finish = () => {
+      if (mask) mask.hidden = true;
+      if (panel) { panel.hidden = true; panel.innerHTML = ''; }
+      if (drawer) { drawer.hidden = true; drawer.innerHTML = ''; }
+      syncSearchNav();
+    };
+    /* 面板淡出、遮罩渐隐，动画走完再清内容；焦点先还回去，别等 */
+    if (mask && !mask.hidden) mjExitDo(mask, 'mj-fade-out');
+    if (panel && !panel.hidden) mjExitDo(panel, 'mj-out');
+    if (drawer && !drawer.hidden) mjExitDo(drawer, 'mj-out-left');
     if (hadFocus) { const rd = $('#reader'); if (rd) rd.focus({ preventScroll: true }); }
-    syncSearchNav();
+    if ((mask && !mask.hidden) || (panel && !panel.hidden) || (drawer && !drawer.hidden)) {
+      panelCloseTimer = setTimeout(() => {
+        panelCloseTimer = 0;
+        [mask, panel, drawer].forEach(mjExitCancel);
+        finish();
+      }, 180);
+    } else finish();
   }
   function switchChapter(id, ch, pct) {
     hideHlEdit();
@@ -3686,6 +3848,8 @@
   /* ---------- 阅读器内文搜索：在本书已载入的章节里找词，点结果跳到命中段落 ---------- */
   function openReaderSearch() {
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
+    cancelPanelClose();
+    mjExitCancel($('#searchDrawer'));
     const mask = $('#readerMask'), d = $('#searchDrawer');
     if (!mask || !d) return;
     mask.hidden = false; d.hidden = false;
@@ -3702,10 +3866,13 @@
     if (inp) { inp.focus(); inp.addEventListener('input', () => runBookSearch(b, inp.value.trim())); }
   }
   function closeReaderSearch() {
-    const d = $('#searchDrawer'); if (d) { d.hidden = true; d.innerHTML = ''; }
+    const d = $('#searchDrawer');
+    if (d && !d.hidden) mjExitDo(d, 'mj-out-right', () => { d.hidden = true; d.innerHTML = ''; });
     const mask = $('#readerMask');
     /* 没有其它面板开着时才撤掉遮罩，免得关了搜索却把背后的面板露出来 */
-    if (mask && $('#catalogDrawer').hidden && $('#readerPanel').hidden) mask.hidden = true;
+    if (mask && $('#catalogDrawer').hidden && $('#readerPanel').hidden) {
+      mjExitDo(mask, 'mj-fade-out', () => { mask.hidden = true; });
+    }
   }
   function runBookSearch(b, q) {
     const box = $('#searchResults'); if (!box) return;
@@ -4269,7 +4436,7 @@
         break;
       case 'set-flipanim':
         state.settings.flipAnim = val; save();
-        if (val !== 'slide') clearAdj();
+        if (val !== 'slide') { realClear(); clearAdj(); }
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-flipanim') p.classList.toggle('active', p.dataset.val === val); });
         break;
       case 'reset-data':
@@ -4755,8 +4922,9 @@
       if (listen.active) { listenStopAll(); return; }
       if (!$('#searchDrawer').hidden) { closeReaderSearch(); return; }
       if (ui.searchNavOn) { closeSearchNav(); return; }
-      const panel = $('#readerPanel');
-      if (panel && !panel.hidden) { closePanel(); return; }
+      /* 目录 / 卷签 / 笔记抽屉也算「面板」，Esc 先收它，别一按就退出阅读器 */
+      const panel = $('#readerPanel'), drawer = $('#catalogDrawer');
+      if ((panel && !panel.hidden) || (drawer && !drawer.hidden)) { closePanel(); return; }
       if (readerRoot.dataset.currentBook) {
         if (history.length > 1) history.back(); else go('book/' + readerRoot.dataset.currentBook);
         return;

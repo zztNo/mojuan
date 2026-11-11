@@ -1442,3 +1442,116 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 }
 .rn-list li { padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 7%, transparent); }
 .rn-list li:last-child { border-bottom: 0; }
+
+
+/* ============================================================
+   全站出现 / 退场过渡
+   用 opacity + translate/scale 独立属性，不碰元素自身的 transform 定位
+   （.hl-pop 的 -50%、.action-sheet / .cover-editor 的居中都靠 transform）
+   ============================================================ */
+@keyframes mjFade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes mjRise { from { opacity: 0; translate: 0 10px; scale: .985 } to { opacity: 1; translate: 0 0; scale: 1 } }
+@keyframes mjPop { from { opacity: 0; translate: 0 7px; scale: .94 } to { opacity: 1; translate: 0 0; scale: 1 } }
+@keyframes mjLeft { from { opacity: .45; translate: -32px 0 } to { opacity: 1; translate: 0 0 } }
+@keyframes mjRight { from { opacity: .45; translate: 32px 0 } to { opacity: 1; translate: 0 0 } }
+@keyframes mjOut { to { opacity: 0; translate: 0 7px; scale: .985 } }
+@keyframes mjFadeOut { to { opacity: 0 } }
+
+/* 遮罩：屏幕别「唰」地暗一下 */
+.reader-mask:not([hidden]), .modal-backdrop, .sh-backdrop, .drop-hint:not([hidden]) {
+  animation: mjFade .2s ease both;
+}
+/* 抽屉 / 面板：覆盖早期偏硬的 slideIn / sdIn / fadeUp。
+   两个抽屉的基础定位就带 transform（search-drawer 默认 translateX(100%)），
+   所以这里必须用 transform 做关键帧，不能用独立的 translate 属性，否则抽屉会停在屏幕外。 */
+@keyframes mjDrawerL { from { transform: translateX(-100%); opacity: .55 } to { transform: translateX(0); opacity: 1 } }
+@keyframes mjDrawerR { from { transform: translateX(100%); opacity: .55 } to { transform: translateX(0); opacity: 1 } }
+@keyframes mjDrawerLOut { from { transform: translateX(0); opacity: 1 } to { transform: translateX(-100%); opacity: .35 } }
+@keyframes mjDrawerROut { from { transform: translateX(0); opacity: 1 } to { transform: translateX(100%); opacity: .35 } }
+.catalog-drawer:not([hidden]) { animation: mjDrawerL .26s cubic-bezier(.22, .68, .36, 1) both; }
+.search-drawer:not([hidden]) { animation: mjDrawerR .26s cubic-bezier(.22, .68, .36, 1) both; }
+.reader-settings, .reader-notes { animation: mjRise .26s cubic-bezier(.22, .68, .36, 1) both; }
+/* 设置项逐行落位：打开面板时有个「长出来」的过程，不是整块砸下来 */
+.reader-settings .rs-row { animation: mjFade .26s ease both; }
+.reader-settings .rs-row:nth-child(1) { animation-delay: .02s }
+.reader-settings .rs-row:nth-child(2) { animation-delay: .05s }
+.reader-settings .rs-row:nth-child(3) { animation-delay: .08s }
+.reader-settings .rs-row:nth-child(4) { animation-delay: .11s }
+.reader-settings .rs-row:nth-child(5) { animation-delay: .14s }
+.reader-settings .rs-row:nth-child(6) { animation-delay: .17s }
+.reader-settings .rs-row:nth-child(7) { animation-delay: .2s }
+.reader-settings .rs-row:nth-child(8) { animation-delay: .23s }
+
+/* 小浮层：划线工具条 / 批注框 / 检索条 / 进度气泡 / 批量整理条 */
+.hl-pop:not([hidden]), .hl-note:not([hidden]), .rb-bubble:not([hidden]),
+.search-nav:not([hidden]), .note-multi-bar, .cat-empty:not([hidden]) {
+  animation: mjPop .19s cubic-bezier(.2, .8, .3, 1) both;
+}
+/* 模态卡片：背板淡入 + 卡片轻轻浮起 */
+.cover-editor, .sh-card { animation: mjPop .24s cubic-bezier(.2, .8, .3, 1) both; }
+.action-sheet { animation: mjRise .26s cubic-bezier(.22, .68, .36, 1) both; }
+/* 听卷小球缩小 / 展开都别瞬移 */
+.listen-mini:not([hidden]) { animation: mjPop .22s cubic-bezier(.2, .8, .3, 1) both; }
+
+/* 退场：由 JS 挂 class，动画走完再真正 hidden / 清空 */
+.mj-out { animation: mjOut .18s ease forwards !important; pointer-events: none !important; }
+.mj-fade-out { animation: mjFadeOut .18s ease forwards !important; pointer-events: none !important; }
+.mj-out-left { animation: mjDrawerLOut .18s ease forwards !important; pointer-events: none !important; }
+.mj-out-right { animation: mjDrawerROut .18s ease forwards !important; pointer-events: none !important; }
+
+/* 控件的状态变化也要有过程，别一点就硬切 */
+.rs-pill, .chip, .btn, .icon-btn, .rb-mbtn, .cat-tabs button, .hl-btn, .hl-dot,
+.nav-item, .book-card, .setting-row, .sn-btn, .sn-x, .search-item, .quick-add {
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease,
+              box-shadow .18s ease, opacity .18s ease;
+}
+.rs-pill:active, .chip:active:not(:disabled), .btn:active, .icon-btn:active,
+.rb-mbtn:active, .cat-tabs button:active, .quick-add:active { scale: .94; }
+
+/* 系统开了「减少动态效果」就别硬塞动画 */
+@media (prefers-reduced-motion: reduce) {
+  .reader-mask, .modal-backdrop, .sh-backdrop, .drop-hint,
+  .catalog-drawer, .search-drawer, .reader-settings, .reader-notes,
+  .reader-settings .rs-row, .hl-pop, .hl-note, .rb-bubble, .search-nav,
+  .note-multi-bar, .cat-empty, .cover-editor, .sh-card, .action-sheet,
+  .listen-mini, .mj-out, .mj-fade-out, .mj-out-left, .mj-out-right { animation-duration: .01ms !important; }
+}
+
+
+/* ============================================================
+   仿真翻页：当前页就是一张纸，绕左侧书脊绕 Y 轴翻过去
+   ============================================================ */
+.flip-paper.realistic { perspective: 2200px; perspective-origin: 0% 50%; }
+.flip-paper.realistic #flipPage,
+.flip-paper.realistic #flipBack {
+  transform-origin: 0% 50%;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  will-change: transform;
+  background: var(--reader-bg, #f7f2e6);
+  /* 纸的右缘投影跟着纸一起转，翻起的边界才有厚度感 */
+  box-shadow: 16px 0 26px -12px rgba(30, 20, 9, .42);
+}
+.flip-paper.realistic #flipPage { z-index: 4; }
+.flip-paper.realistic #flipBack { z-index: 3; }
+/* 底层页：翻过去之后露出来的那一页，静止不动 */
+.flip-paper.realistic #flipAdj {
+  z-index: 1; box-shadow: none; background: var(--reader-bg, #f7f2e6);
+}
+/* 纸背：淡淡反印出刚翻走的那一页，像透过纸背看见的字 */
+.flip-back-inner { transform: scaleX(-1); opacity: .17; }
+.flip-back::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(40, 26, 12, .12), rgba(40, 26, 12, 0) 52%),
+              linear-gradient(0deg, rgba(40, 26, 12, .06), rgba(40, 26, 12, 0) 36%);
+}
+/* 书脊阴影 + 纸面受光：透明度由 JS 跟着手指进度调 */
+.flip-shade {
+  position: absolute; top: 40px; left: 40px; right: 40px; bottom: 56px;
+  z-index: 5; pointer-events: none; opacity: 0;
+  background:
+    linear-gradient(90deg, rgba(30, 20, 9, .46) 0%, rgba(30, 20, 9, .16) 11%, rgba(30, 20, 9, 0) 44%),
+    linear-gradient(270deg, rgba(30, 20, 9, .2) 0%, rgba(30, 20, 9, 0) 26%);
+}
+@media (max-width: 767px) {
+  .flip-shade { top: 24px; left: 22px; right: 22px; bottom: 46px; }
+}
