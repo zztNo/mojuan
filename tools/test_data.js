@@ -436,6 +436,52 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
     await ctx.close();
   }
 
+  /* ---------- 17. 高亮索引 / 无障碍扫描 / 搜索防抖与限流 ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('高亮改为按章段预建索引', src.includes('function buildHlIndex') && src.includes('highlightHtml(p, b.id, ch, j, hidx)'));
+    ok('无障碍扫描排除已处理节点', src.includes("[data-action]:not([data-a11y])"));
+    ok('内文搜索有防抖与结果上限', src.includes('scheduleBookSearch') && src.includes('SEARCH_SHOW_LIMIT'));
+    ok('未调用的 listenParaAt 已清理', !src.includes('function listenParaAt'));
+
+    const { ctx, p, errs } = await scene(browser, seeded(), async (pp) => {
+      await pp.addInitScript(() => {
+        window.__sr = 0;
+        const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+        Object.defineProperty(Element.prototype, 'innerHTML', {
+          configurable: true,
+          get() { return d.get.call(this); },
+          set(v) { if (this.id === 'searchResults') window.__sr++; return d.set.call(this, v); }
+        });
+      });
+    });
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerPaper p[data-pi]', { timeout: 8000 });
+    await p.click('[data-action="reader-search"]');
+    await p.waitForSelector('#searchBox');
+    await p.evaluate(() => { window.__sr = 0; });
+    await p.type('#searchBox', '关关雎鸠', { delay: 45 });
+    await p.waitForTimeout(430);
+    ok('连打多字只重绘一次结果区', (await p.evaluate(() => window.__sr)) === 1,
+      '重绘=' + (await p.evaluate(() => window.__sr)));
+    ok('防抖后结果仍正确', (await p.textContent('.search-count')).includes('1 处'));
+    await p.fill('#searchBox', '之');
+    await p.waitForTimeout(430);
+    const items = await p.locator('.search-item').count();
+    const cnt = await p.textContent('.search-count');
+    ok('大量命中列表限流到 200 条', items === 200, 'items=' + items);
+    ok('仍显示全部命中总数', cnt.includes('584'), cnt.slice(0, 70));
+    await p.locator('.search-item').first().click();
+    await p.waitForTimeout(700);
+    ok('检索条仍按全部命中计数', (await p.textContent('#searchNavCount').catch(() => '')).trim() === '1 / 584');
+    const missing = await p.evaluate(() => Array.from(
+      document.querySelectorAll('#view [data-action]:not([data-a11y])')
+    ).filter((el) => !/^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(el.tagName)).length);
+    ok('自定义可点节点没漏补语义', missing === 0, 'missing=' + missing);
+    ok('本组改动无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
   await browser.close();
   console.log('\n数据安全 / 兼容专项：' + pass + ' PASS / ' + fail + ' FAIL');
   if (fail) process.exit(1);

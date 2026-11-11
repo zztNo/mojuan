@@ -117,8 +117,11 @@ const newPage = async (browser, extra, errs) => {
     await p.waitForSelector('#searchBox');
     await p.fill('#searchBox', '之');
     await p.waitForTimeout(500);
-    const n = await p.locator('.search-item').count();
+    /* 列表现在只铺前 200 条，但导航条按全部命中计数，总数要从提示里读 */
+    const n = parseInt(((await p.textContent('.search-count')) || '').match(/找到 (\d+)/)?.[1] || '0', 10);
+    const shown = await p.locator('.search-item').count();
     ok('内文检索有多处命中', n > 10, 'n=' + n);
+    ok('列表限流但总数完整', shown <= 200 && n >= shown, 'shown=' + shown + ' total=' + n);
     await p.locator('.search-item').first().click();
     await p.waitForTimeout(700);
     ok('检索条浮出且计数从 1 开始', await p.locator('#searchNav').isVisible()

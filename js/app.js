@@ -396,8 +396,10 @@
   const NATIVE_CTL = /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/;
   function a11ySweep(root) {
     if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('[data-action]').forEach((el) => {
-      if (NATIVE_CTL.test(el.tagName) || el.dataset.a11y === '1') return;
+    /* 只取还没补过语义的节点：原来每次 render 都把整页上千个已处理节点
+       取回来再在 JS 里跳过，选择器层面过滤掉省一大截。 */
+    root.querySelectorAll('[data-action]:not([data-a11y])').forEach((el) => {
+      if (NATIVE_CTL.test(el.tagName)) return;
       el.dataset.a11y = '1';
       if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
       if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
@@ -1579,6 +1581,7 @@
     return READER_ERR_RE.test(t) ? t.replace(/^（/, '').replace(/）$/, '') : '';
   }
   function readerHtml(b, ch) {
+    const hidx = buildHlIndex(b.id);
     const chapters = chapterList(b);
     const cur = chapters[ch - 1];
     const paras = paragraphs(b, ch - 1);
@@ -1605,7 +1608,7 @@
       : `<div class="reader-paper" id="readerPaper">
           <div class="reader-chapter-no">${esc(b.title)} · ${esc(b.author)}</div>
           <h1>${esc(cur.title)}</h1>
-          ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${highlightHtml(p, b.id, ch, j)}</p>`).join('')}
+          ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${highlightHtml(p, b.id, ch, j, hidx)}</p>`).join('')}
           ${notes.length && !errMsg ? `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} 注释 · ${notes.length} 条</button>` : ''}
           <div class="reader-chapter-nav">
             <button data-action="reader-prev" ${ch <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
@@ -1827,11 +1830,12 @@
   function pageInner(pos) {
     const page = flipState.pages[pos];
     if (!page) return '';
+    const hidx = buildHlIndex(flipState.id);
     return page.map((it) => {
       if (it.type === 'no') return `<div class="reader-chapter-no" data-fi="${it.idx}">${esc(it.text)}</div>`;
       if (it.type === 'h1') return `<h1 data-fi="${it.idx}">${esc(it.text)}</h1>`;
       if (it.type === 'notes') return `<button class="ch-notes-entry" data-action="open-notes" data-fi="${it.idx}">${icon('list', 'ic-sm')} ${esc(it.text)}</button>`;
-      return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${highlightHtml(it.text, flipState.id, flipState.ch, it.idx - 2)}</p>`;
+      return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${highlightHtml(it.text, flipState.id, flipState.ch, it.idx - 2, hidx)}</p>`;
     }).join('');
   }
   /* 落定某一页：换内容、页脚、进度。直接跳页与动画收尾都走这里 */
@@ -2278,17 +2282,36 @@
   /* ---------- 划线 / 批注 ---------- */
   function annotationList(id) { return state.annotations[id] || []; }
   function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-  /* 把本章本段的所有划线一次性套 <mark>：先 esc 再单次正则替换，
-     既防 XSS，又避免多条重叠划线把已插入的标签二次拆坏。 */
-  function highlightHtml(raw, bid, ch, pi) {
-    const out = esc(raw);
-    /* 文本 -> 颜色，单次正则替换：多色、重叠、特殊字符都不会把标签拆坏 */
-    const map = new Map();
-    const valid = ['red', 'jade', 'gold'];
-    annotationList(bid).filter((a) => a.ch === ch && a.pi === pi && a.text).forEach((a) => {
+  const HL_COLORS = ['red', 'jade', 'gold'];
+  /* 渲染整章前先按「章:段」把全书划线建成一张表。
+     原来每段都 filter 一遍全书笔记（几百段 × 几百条 = 十几万次比较），
+     现在建表 O(M)、每段查表 O(1)。表只在单次渲染内使用，不必操心失效。 */
+  function buildHlIndex(bid) {
+    const idx = new Map();
+    annotationList(bid).forEach((a) => {
+      if (!a.text) return;
       const q = esc(String(a.text).trim());
-      if (q && !map.has(q)) map.set(q, valid.includes(a.color) ? a.color : 'red');
+      if (!q) return;
+      const k = a.ch + ':' + a.pi;
+      let m = idx.get(k);
+      if (!m) { m = new Map(); idx.set(k, m); }
+      if (!m.has(q)) m.set(q, HL_COLORS.includes(a.color) ? a.color : 'red');
     });
+    return idx;
+  }
+  /* 把本章本段的所有划线一次性套 <mark>：先 esc 再单次正则替换，
+     既防 XSS，又避免多条重叠划线把已插入的标签二次拆坏。
+     第 5 个参数是可选的预建索引；不传时退回只扫本段的局部构建（单段刷新用）。 */
+  function highlightHtml(raw, bid, ch, pi, hidx) {
+    const out = esc(raw);
+    let map = hidx ? hidx.get(ch + ':' + pi) : null;
+    if (!map) {
+      map = new Map();
+      annotationList(bid).filter((a) => a.ch === ch && a.pi === pi && a.text).forEach((a) => {
+        const q = esc(String(a.text).trim());
+        if (q && !map.has(q)) map.set(q, HL_COLORS.includes(a.color) ? a.color : 'red');
+      });
+    }
     if (!map.size) return out;
     const qs = Array.from(map.keys()).sort((x, y) => y.length - x.length);
     const re = new RegExp('(' + qs.map(escRe).join('|') + ')', 'g');
@@ -2786,11 +2809,6 @@
     listen.sentIndex = 0; listen.charIndex = 0; listen.paraIndex = 0;
     listen.elapsed = 0; listen.boundaryOK = false;
     return !!listen.text;
-  }
-  function listenParaAt(idx) {
-    let i = 0;
-    listen.sents.forEach((s, k) => { if (s.start <= idx) { i = s.para; } });
-    return i;
   }
   /* 上次听到哪一句：只认听书自己存的句子下标。
      以前拿 state.progress.pct 乘正文长度来估字符位置，但那个 pct 在滚动模式是
@@ -3992,6 +4010,13 @@
 
   /* ---------- 阅读器内文搜索：在本书已载入的章节里找词，点结果跳到命中段落 ---------- */
   let searchAllToken = 0;
+  let readerSearchTimer = 0;
+  const SEARCH_SHOW_LIMIT = 200;
+  /* 输入时别每敲一个字就把全书重扫一遍（长卷上千章会明显卡手） */
+  function scheduleBookSearch(b, q) {
+    clearTimeout(readerSearchTimer);
+    readerSearchTimer = setTimeout(() => { readerSearchTimer = 0; runBookSearch(b, q); }, 140);
+  }
   function openReaderSearch() {
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
     cancelPanelClose();
@@ -4012,10 +4037,11 @@
       ${needNet ? `<div class="search-hint" id="searchHint">已检索已读过的 ${cached} / ${total} 章 · <button class="linklike" data-action="search-all">联网检索全书</button></div>` : ''}
       <div class="search-results" id="searchResults"><div class="search-empty">输入关键词，在本书内查找</div></div>`;
     const inp = d.querySelector('#searchBox');
-    if (inp) { inp.focus(); inp.addEventListener('input', () => runBookSearch(b, inp.value.trim())); }
+    if (inp) { inp.focus(); inp.addEventListener('input', () => scheduleBookSearch(b, inp.value.trim())); }
   }
   function closeReaderSearch() {
     searchAllToken += 1; /* 抽屉关了就别让后台继续拉章节 */
+    clearTimeout(readerSearchTimer); readerSearchTimer = 0;
     const d = $('#searchDrawer');
     if (d && !d.hidden) mjExitDo(d, 'mj-out-right', () => { d.hidden = true; d.innerHTML = ''; });
     const mask = $('#readerMask');
@@ -4049,7 +4075,13 @@
     });
     if (!hits.length) { box.innerHTML = '<div class="search-empty">没有找到「' + esc(q) + '」</div>'; return; }
     ui.searchHits = hits; ui.searchQ = q;
-    box.innerHTML = `<div class="search-count">找到 ${hits.length} 处匹配<span class="sc-tip">点结果跳过去，之后可用「上一处 / 下一处」接着翻</span></div>` + hits.map((h, i) =>
+    /* 全部命中仍留在 ui.searchHits 里，「上一处 / 下一处」能走完；
+       但列表一次铺几百上千个 button 会拖垮抽屉，只列前 200 条并说明。 */
+    const shown = hits.slice(0, SEARCH_SHOW_LIMIT);
+    const tip = hits.length > SEARCH_SHOW_LIMIT
+      ? `列表只列前 ${SEARCH_SHOW_LIMIT} 处；「上一处 / 下一处」仍可走完全部 ${hits.length} 处`
+      : '点结果跳过去，之后可用「上一处 / 下一处」接着翻';
+    box.innerHTML = `<div class="search-count">找到 ${hits.length} 处匹配<span class="sc-tip">${tip}</span></div>` + shown.map((h, i) =>
       `<button class="search-item" data-action="search-go" data-val="${i}">
          <span class="si-ch">第 ${h.ch} 章</span><span class="si-frag">${h.frag}</span>
        </button>`).join('');
@@ -4143,6 +4175,7 @@
     await Promise.all(Array.from({ length: Math.min(3, total) }, worker));
     if (token !== searchAllToken) return;
     const q = (($('#searchBox') || {}).value || '').trim();
+    clearTimeout(readerSearchTimer); readerSearchTimer = 0;
     runBookSearch(b, q);
     if (hint) hint.innerHTML = '已检索全部 ' + total + ' 章';
   }
