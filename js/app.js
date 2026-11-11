@@ -2845,10 +2845,15 @@
     elapsed: 0, startedAt: 0, lastStart: 0, boundaryOK: false,
     remoteOff: false,
     dragging: false,
-    prevOverflow: ''
+    prevOverflow: '',
+    /* 自愈用：本句开口时刻、最近一次「有动静」的时刻、连续卡住次数 */
+    sentAt: 0, lastBeat: 0, stall: 0,
+    /* 进 bfcache 前是否在播：重新现身时用它决定要不要自动接着念 */
+    pausedByHide: false
   };
   let ttsGen = 0, listenTimer = null, listenTick = null, keepAudio = null, lastCommit = 0;
   let listenFadeTimer = null;
+  let listenReviveTimer = null;
   /* 在线音色：合成的音频、正在播的 <audio>、失败回退标记 */
   let remoteAudio = null, remoteUrl = null, remoteWarned = false;
   const audioCache = new Map();
@@ -3066,7 +3071,15 @@
   function listenReleaseWakeLock() {
     if (wakeLock) { try { wakeLock.release(); } catch (e) { /* 忽略 */ } wakeLock = null; }
   }
-  document.addEventListener('visibilitychange', () => { if (listen.playing && !document.hidden) listenWakeLock(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!listen.playing || document.hidden) return;
+    listenWakeLock();
+    /* 手机锁屏 / 切走一阵再回来：先把 paused 解开，再看有没有动静。
+       后台被掐断时浏览器一个回调都不给，只能靠自己补一句。 */
+    listenEnsureResumed();
+    clearTimeout(listenReviveTimer);
+    listenReviveTimer = setTimeout(listenRevive, 800);
+  });
   function listenScrollToPara() {
     const b = getBook(listen.bookId); if (!b) return;
     if (readerRoot.dataset.currentBook !== b.id) return;
@@ -3255,6 +3268,65 @@
     }
     listenSpeak(true);
   }
+  /* ---------- 朗读自愈：切后台 / 锁屏 / 来电打断后回来，别只剩一个哑巴播放键 ----------
+   * 三种现场浏览器都不会给回调：
+   *   ① 页面隐藏一阵后 Chrome 会把 speechSynthesis 置成 paused，回前台仍是 paused，
+   *      speak() 只往队列里塞东西，一声不出；
+   *   ② 来电 / 别的 App 抢走音频，utterance 收到 interrupted 就没了下文，playing 还挂着 true；
+   *   ③ 长句合成后 onend 偶发不回调（Chromium 老毛病），进度永远停在那一句上。
+   * 办法：每句开口记 sentAt，boundary / onend / 音频 timeupdate 记 lastBeat；
+   * 每秒巡检，超出这句的合理时长还没动静就原地重讲这一句 —— 进度不丢，用户不用动手。 */
+  function listenEnsureResumed() {
+    if (!speechOK()) return;
+    try { if (speechSynthesis.paused) speechSynthesis.resume(); } catch (e) { /* 忽略 */ }
+  }
+  function listenBeat() { listen.lastBeat = Date.now(); }
+  /* 一句最慢能念多久：中文约 4.5 字/秒，语速乘进去，再宽放 6 秒给慢合成 */
+  function listenBudget(chars) {
+    return Math.max(6000, (chars / (4.5 * Math.max(0.5, listen.rate))) * 1000 + 6000);
+  }
+  /* 原地重讲当前句。不走 listenSpeak 是为了保住 sentIndex / 已听时长 */
+  function listenRespeak() {
+    if (!listen.active || !listen.playing) return;
+    /* 连续重讲说明环境真的不给念（通话中、音频被长期占用），别无限重试 */
+    listen.stall += 1;
+    if (listen.stall > 3) {
+      listen.playing = false;
+      listenReleaseWakeLock();
+      toast('朗读一直被打断，已暂停');
+      listenRenderDynamic();
+      return;
+    }
+    const gen = ++ttsGen;
+    listenDropAudio();
+    try {
+      if (speechOK()) {
+        /* 队列里可能还挂着一条没头没尾的 utterance，不清掉新的 speak 会排在它后面 */
+        if (speechSynthesis.paused) speechSynthesis.resume();
+        speechSynthesis.cancel();
+      }
+    } catch (e) { /* 忽略 */ }
+    listen.sentAt = Date.now(); listen.lastBeat = listen.sentAt;
+    listenPlaySent(gen);
+  }
+  function listenWatchdog() {
+    if (!listen.active || !listen.playing || listen.fadeOut) return;
+    const s = listen.sents[listen.sentIndex];
+    if (!s) return;
+    if (remoteAudio && !remoteAudio.paused && !remoteAudio.ended) return; /* 音频在走，别插嘴 */
+    const now = Date.now();
+    if (now - (listen.lastBeat || listen.sentAt || now) < listenBudget(s.t.length)) return;
+    listenRespeak();
+  }
+  /* 回前台时更急一点：后台断掉的话 lastBeat 早就停在断开那一刻了 */
+  function listenRevive() {
+    if (!listen.active || !listen.playing || listen.fadeOut) return;
+    listenEnsureResumed();
+    if (remoteAudio && !remoteAudio.paused && !remoteAudio.ended) return;
+    const s = listen.sents[listen.sentIndex];
+    const grace = s ? Math.min(8000, listenBudget(s.t.length) / 2) : 4000;
+    if (Date.now() - (listen.lastBeat || 0) > grace) listenRespeak();
+  }
   async function listenPlayRemote(gen, s) {
     listen.playing = true;
     listenRenderDynamic();
@@ -3274,6 +3346,7 @@
     remoteAudio.dataset.sent = String(listen.sentIndex);
     a.onended = () => {
       if (gen !== ttsGen) return;
+      listen.stall = 0;
       listenDropAudio();
       listen.sentIndex += 1;
       const nx = listen.sents[listen.sentIndex];
@@ -3286,6 +3359,7 @@
     a.ontimeupdate = () => {
       if (gen !== ttsGen) return;
       const d = a.duration;
+      listenBeat();
       if (!d || !isFinite(d)) return;
       const pct = Math.max(0, Math.min(1, a.currentTime / d));
       listen.charIndex = Math.min(listen.text.length - 1, s.start + Math.floor(s.t.length * pct));
@@ -3310,6 +3384,7 @@
     try { if (speechOK()) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     if (!resume) { listen.sentIndex = 0; listen.elapsed = 0; listen.charIndex = 0; }
     listen.playing = true;
+    listen.stall = 0;
     listenWakeLock();
     listen.startedAt = Date.now();
     listen.boundaryOK = false;
@@ -3322,12 +3397,15 @@
     const s = listen.sents[listen.sentIndex];
     if (!s) { listenChapterDone(); return; }
     if (listenRemoteOn()) { listenPlayRemote(gen, s); return; }
+    /* 后台回来时 speechSynthesis 可能还停在 paused，先解开，否则下面这句不会出声 */
+    listenEnsureResumed();
     const u = new SpeechSynthesisUtterance(s.t);
     u.lang = 'zh-CN'; u.rate = listen.rate;
     const v = listenPickVoice(); if (v) u.voice = v;
     u.onboundary = (ev) => {
       if (gen !== ttsGen) return;
       listen.boundaryOK = true;
+      listenBeat();
       listen.charIndex = Math.min(listen.text.length - 1, s.start + (ev.charIndex || 0));
       listen.paraIndex = s.para;
       listenRenderDynamic();
@@ -3341,6 +3419,8 @@
         listenRenderDynamic();
         return;
       }
+      listen.stall = 0;
+      listenBeat();
       listen.sentIndex += 1;
       const nx = listen.sents[listen.sentIndex];
       listen.charIndex = nx ? nx.start : listen.text.length;
@@ -3352,12 +3432,23 @@
     u.onerror = (ev) => {
       if (gen !== ttsGen) return;
       const kind = ev && ev.error;
-      if (kind === 'interrupted' || kind === 'canceled') return;
+      /* canceled 是主动取消（换句 / 暂停 / 停止），不用管；
+         interrupted 是系统打断（来电、切后台、别的 App 抢音频）——
+         录音队列已经空了，可页面还挂着「正在播」，不重讲的话回来就是个哑巴播放键。 */
+      if (kind === 'canceled') return;
+      if (kind === 'interrupted') {
+        if (!listen.playing) return;
+        setTimeout(() => {
+          if (gen === ttsGen && listen.active && listen.playing) listenRespeak();
+        }, 800);
+        return;
+      }
       listen.playing = false;
       listenRenderDynamic();
       if (kind === 'not-allowed') toast('需要先点一下播放');
     };
     try {
+      listen.sentAt = Date.now(); listen.lastBeat = listen.sentAt;
       speechSynthesis.speak(u);
       listen.lastStart = Date.now();
       listenRenderDynamic();
@@ -3366,11 +3457,13 @@
   function listenPause() {
     /* 手动暂停就取消这次收尾，之后再点播放能继续听 */
     clearTimeout(listenFadeTimer); listenFadeTimer = null; listen.fadeOut = false;
+    clearTimeout(listenReviveTimer); listenReviveTimer = null;
     ttsGen += 1;
     listenDropAudio();
     try { speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     if (listen.startedAt) { listen.elapsed += (Date.now() - listen.startedAt) / 1000; listen.startedAt = 0; }
     listen.playing = false;
+    listen.stall = 0;
     listenReleaseWakeLock();
     listenCommitProgress();
     listenRenderDynamic();
@@ -3790,6 +3883,7 @@
   /* 定时到点不硬断：等当前这句自然念完再收尾；15 秒兜底防超长句卡住 */
   function listenFinishFade() {
     clearTimeout(listenFadeTimer); listenFadeTimer = null;
+    clearTimeout(listenReviveTimer); listenReviveTimer = null;
     if (!listen.fadeOut || !listen.active) return;
     listen.fadeOut = false;
     ttsGen += 1;
@@ -3806,12 +3900,14 @@
   }
   function listenStopAll() {
     clearTimeout(listenFadeTimer); listenFadeTimer = null; listen.fadeOut = false;
+    clearTimeout(listenReviveTimer); listenReviveTimer = null;
     ttsGen += 1;
     try { if (speechOK()) speechSynthesis.cancel(); } catch (e) { /* 忽略 */ }
     clearTimeout(listenTimer); clearInterval(listenTick);
     listenDropAudio();
     listenCommitProgress(true); /* 强制补上最后一句，别被 1.2s 节流吃掉 */
     listen.active = false; listen.playing = false; listen.expanded = true;
+    listen.pausedByHide = false;
     listen.timerMin = 0; listen.timerAt = 0;
     listenMediaSession(false);
     listenKeepAlive(false);
@@ -3863,7 +3959,12 @@
     listenSpeak(true);
     if (resumeAt > 0) toast('接着上次听到的地方');
     clearInterval(listenTick);
-    listenTick = setInterval(() => { if (listen.active) listenRenderDynamic(); }, 1000);
+    listenTick = setInterval(() => {
+      if (!listen.active) return;
+      listenRenderDynamic();
+      /* 每秒顺带巡检：onend 丢了的句子在这里被捞回来 */
+      listenWatchdog();
+    }, 1000);
   }
 
   /* 字号 / 行距 / 窗口尺寸变化时，按当前阅读位置重新分页 */
@@ -3984,12 +4085,25 @@
       startReadClock(readerSession.book);
     }
   });
-  window.addEventListener('pagehide', () => {
+  window.addEventListener('pagehide', (e) => {
     if (readerSession) { accrueReadTime(Date.now()); stopReadClock(); }
     /* 关页/刷新前把最后一次翻页、滚动进度立即落盘，否则节流中的存档会丢 */
     commitScrollProbe();
     flushSave();
-    if (listen.active) listenStopAll();
+    if (!listen.active) return;
+    /* 进 bfcache 的页面会被原样还原，这会儿把听卷销毁掉，用户切回来就只剩个空阅读器。
+       这种场合只暂停、留状态，等 pageshow 自己接着念；真关页才收摊。 */
+    if (e && e.persisted) {
+      listen.pausedByHide = listen.playing;
+      if (listen.playing) listenPause();
+      return;
+    }
+    listenStopAll();
+  });
+  window.addEventListener('pageshow', (e) => {
+    if (!e || !e.persisted || !listen.active || !listen.pausedByHide) return;
+    listen.pausedByHide = false;
+    listenSpeak(true);
   });
   function paginateAndRender(b, ch, token, dir) {
     if (token !== readerToken) return;

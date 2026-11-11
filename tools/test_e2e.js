@@ -33,6 +33,27 @@ const newPage = async (browser, extra, errs) => {
   await p.addInitScript(seed, extra || {});
   return p;
 };
+/* 假语音引擎：记下每一句，也能故意吞掉 onend（Chromium 长句丢回调的老毛病）；
+   speaking 恒为 false，模拟「进程静止但页面还以为在播」的现场。
+   window.__dropEnd 为真时吞掉 onend，置 0 恢复正常。 */
+const TTS_MOCK = () => {
+  const S = {
+    paused: false, speaking: false, pending: false, __spoke: [], __resume: 0, __last: null,
+    /* 不返回音色：utterance.voice 只认真 SpeechSynthesisVoice，塞假对象会抛 TypeError */
+    getVoices() { return []; },
+    addEventListener() {}, removeEventListener() {},
+    resume() { S.paused = false; S.__resume += 1; },
+    pause() { S.paused = true; },
+    cancel() { S.speaking = false; S.pending = false; },
+    speak(u) {
+      S.__spoke.push(u.text); S.__last = u; S.speaking = false;
+      if (!window.__dropEnd) setTimeout(() => { try { u.onend && u.onend(); } catch (e) { /* 忽略 */ } }, 30);
+    }
+  };
+  window.__dropEnd = 1;
+  Object.defineProperty(window, 'speechSynthesis', { configurable: true, get: () => S });
+  window.__tts = S;
+};
 
 (async () => {
   const errs = [];
@@ -374,6 +395,80 @@ const newPage = async (browser, extra, errs) => {
       && !(await p.evaluate(() => document.getElementById('reader').hasAttribute('inert'))));
     await p.click('[data-action="listen-close"]');
     await p.waitForTimeout(300);
+    await p.close();
+  }
+
+  /* ---------- H2. 听卷自愈：onend 丢失 / 来电打断 / 后台留成 paused ---------- */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.addInitScript(seed, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } });
+    await p.addInitScript(TTS_MOCK);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.waitForTimeout(500);
+    ok('听卷起手只念一句', (await p.evaluate(() => window.__tts.__spoke.length)) === 1);
+    /* ① onend 丢了：巡检应在合理时长后原地重讲同一句，而不是永远停在那儿
+       （首句「关雎 · 国风·周南」按 4.5 字/秒 + 6 秒余量算出来约 8 秒，等 9 秒稳一点） */
+    await p.waitForTimeout(9000);
+    const stuck = await p.evaluate(() => window.__tts.__spoke.slice(0, 2));
+    ok('onend 丢失时会重讲同一句，不卡死', stuck.length === 2 && stuck[1] === stuck[0],
+      JSON.stringify(stuck));
+    /* ② 来电打断：录音队列已空但页面还挂着播放，应自动接上并继续往前念 */
+    await p.evaluate(() => {
+      window.__dropEnd = 0;
+      const u = window.__tts.__last;
+      if (u && u.onerror) u.onerror({ error: 'interrupted' });
+    });
+    await p.waitForTimeout(1600);
+    const after = await p.evaluate(() => window.__tts.__spoke);
+    ok('来电打断后自动接上', after.length >= 3, 'spoke=' + after.length);
+    ok('接上后能继续往后念，不是反复重来', after[after.length - 1] !== after[0],
+      JSON.stringify(after.slice(-1)));
+    /* ③ 锁屏回来 speechSynthesis 仍挂着 paused：点播放要能自己解开 */
+    const rv = await p.evaluate(async () => {
+      window.__tts.paused = true;
+      const before = window.__tts.__resume;
+      document.getElementById('listenPlay').click(); /* 暂停 */
+      await new Promise((r) => setTimeout(r, 200));
+      document.getElementById('listenPlay').click(); /* 播放 */
+      await new Promise((r) => setTimeout(r, 400));
+      return { before, after: window.__tts.__resume, paused: window.__tts.paused };
+    });
+    ok('后台留下的 paused 会被解开', rv.after > rv.before && rv.paused === false,
+      JSON.stringify(rv));
+    await p.close();
+  }
+
+  /* ---------- H3. 进 bfcache 再回来：听卷不该被销毁 ---------- */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.addInitScript(seed, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } });
+    await p.addInitScript(TTS_MOCK);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.waitForTimeout(400);
+    ok('H3 前置：打开听卷就在播',
+      (await p.getAttribute('#listenPlay', 'aria-label')) === '暂停');
+    await p.evaluate(() => { window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })); });
+    await p.waitForTimeout(300);
+    const bf = await p.evaluate(() => ({
+      kept: !!document.getElementById('listen'),
+      label: (document.getElementById('listenPlay') || {}).getAttribute
+        ? document.getElementById('listenPlay').getAttribute('aria-label') : '',
+      spoke: window.__tts.__spoke.length
+    }));
+    ok('进 bfcache 不销毁听卷', bf.kept === true);
+    ok('进 bfcache 时先暂停，别在后台干念', bf.label === '播放', bf.label);
+    await p.evaluate(() => { window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })); });
+    await p.waitForTimeout(700);
+    ok('回到页面自动接着念',
+      (await p.evaluate(() => window.__tts.__spoke.length)) > bf.spoke);
     await p.close();
   }
 
