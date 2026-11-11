@@ -12,16 +12,73 @@
       .trim();
   }
 
+  /* 正解码出来的中文里，汉字与全角标点占绝对多数；解错编码则混进假名、
+     西里尔、注音、私用区、替换符……按这个给候选编码打分，比分最高的就是它。
+     （TextDecoder 只有 utf-8 会因非法字节抛错，gb18030 / big5 对任何字节
+     都「解码成功」，所以不能靠 try/catch 逐一试，必须比分数。） */
+  const CN_PUNCT = '，。、；：？！“”‘’（）《》〈〉…—·「」『』～';
+
+  function scoreText(t) {
+    const s = t.slice(0, 4000);
+    if (!s) return -1e9;
+    let score = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 0xFFFD) score -= 12;                                   /* 替换符：解不动 */
+      else if (c < 0x20) score += (c === 9 || c === 10 || c === 13) ? 0 : -10;
+      else if (c >= 0x4E00 && c <= 0x9FFF) score += 1;                 /* 汉字 */
+      else if (CN_PUNCT.indexOf(s[i]) >= 0) score += 1.5;
+      else if (c < 0x80) score += 0.2;                                 /* ASCII：正常但没信息量 */
+      else if (c >= 0xE000 && c <= 0xF8FF) score -= 6;                  /* 私用区 */
+      else if (c >= 0x3400 && c <= 0x4DBF) score -= 2;                  /* 扩展 A：中文正文少见 */
+      else if (c >= 0x3000 && c <= 0x30FF) score -= 5;                  /* 假名 / 日文标点 */
+      else if (c >= 0x0400 && c <= 0x04FF) score -= 6;                  /* 西里尔 */
+      else if (c >= 0x0370 && c <= 0x03FF) score -= 6;                  /* 希腊 */
+      else if (c >= 0x3100 && c <= 0x312F) score -= 5;                  /* 注音 */
+    }
+    return score;
+  }
+
+  /* 只在样本上判编码：30MB 的卷不该为「试几种编码」解码五遍 */
+  function sampleOf(buf) {
+    const u8 = new Uint8Array(buf);
+    if (u8.length <= 262144) return buf;
+    /* 跳过开头一长串 ASCII（英文目录、版权声明），否则这一段对中文编码没有区分力 */
+    let pre = 0;
+    for (let i = 0, n = Math.min(u8.length, 200000); i < n; i++) {
+      if (u8[i] > 0x7F) { pre = Math.max(0, i - 16) & ~1; break; }
+    }
+    return buf.slice(pre, Math.min(buf.byteLength, pre + 131072));
+  }
+
   function decode(buf) {
     const u8 = new Uint8Array(buf);
-    if (u8[0] === 0xFF && u8[1] === 0xFE) {
-      try { return new TextDecoder('utf-16le').decode(buf); } catch (e) { /* ignore */ }
+    /* 1) 有 BOM 就按 BOM 来，不用猜 */
+    let enc = null;
+    if (u8[0] === 0xFF && u8[1] === 0xFE) enc = 'utf-16le';
+    else if (u8[0] === 0xFE && u8[1] === 0xFF) enc = 'utf-16be';
+    else if (u8[0] === 0xEF && u8[1] === 0xBB && u8[2] === 0xBF) enc = 'utf-8';
+    /* 2) 严格 UTF-8 能过就是 UTF-8（中文 TXT 绝大多数是它） */
+    if (!enc) {
+      try { new TextDecoder('utf-8', { fatal: true }).decode(sampleOf(buf)); enc = 'utf-8'; }
+      catch (e) { /* 交给打分 */ }
     }
-    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { /* 非 UTF-8 */ }
-    for (const enc of ['gb18030', 'gbk', 'big5']) {
-      try { return new TextDecoder(enc).decode(buf); } catch (e) { /* 继续尝试 */ }
+    if (!enc) {
+      const head = sampleOf(buf);
+      let best = null;
+      /* gb18030 / big5 对任何字节都「解码成功」，utf-16 无 BOM 也能被当成双字节文本，
+         所以不看谁不报错，只看谁解出来的东西像中文。 */
+      for (const c of ['gb18030', 'big5', 'utf-16le', 'utf-16be', 'utf-8']) {
+        let t = null;
+        try { t = new TextDecoder(c).decode(head); } catch (e) { continue; }
+        if (t == null) continue;
+        const s = scoreText(t);
+        if (!best || s > best.s) best = { enc: c, s };
+      }
+      enc = best ? best.enc : 'utf-8';
     }
-    return new TextDecoder('utf-8').decode(buf);
+    try { return new TextDecoder(enc).decode(buf); }
+    catch (e) { return new TextDecoder('utf-8').decode(buf); }
   }
 
   /* 超长段落切成适合阅读的短段 */
