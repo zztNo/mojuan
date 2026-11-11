@@ -482,6 +482,97 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
     await ctx.close();
   }
 
+  /* ---------- 18. 真实缺陷批次：XSS / 主题 / 快捷键 / 动效 / 进度隔离 ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('导入卷名在源头清洗', src.includes('cleanMeta') && src.includes('bookTitle'));
+    ok('书名渲染补了转义', src.includes('${esc(b.title)}'));
+    ok('主题切换统一', src.includes('function toggleNight') && src.includes('toggleNight();'));
+    ok('组合键不被抢', src.includes('if (e.ctrlKey || e.metaKey || e.altKey) return;'));
+    ok('滚动分支清掉陈旧页码', src.includes('ui.flipTargetPage = null; /* 滚动分支'));
+    ok('reduced-motion 管到 WAAPI', src.includes('prefers-reduced-motion: reduce'));
+    ok('听书不再污染阅读进度', !src.includes('state.progress[listen.bookId] = {'));
+    ok('配额失败可反复提示', src.includes('saveWarnAt'));
+    ok('音频清理不再 getAll', src.includes('openCursor()') && !src.includes('st.getAll()'));
+
+    /* XSS：老数据里存了带标签的卷名，渲染不能把它变成真标签 */
+    const evil = { id: 'evil', title: '<img src=x onerror=alert(1)>卷', author: 'A&B',
+      local: true, chapters: ['正文'], words: '1字' };
+    const { ctx, p, errs } = await scene(browser, seeded({
+      shelf: ['evil', 'shijing'], localBooks: [evil]
+    }));
+    await p.goto(FILE + '#/shelf');
+    await p.waitForSelector('[data-shelf-card]', { timeout: 8000 });
+    const injected = await p.evaluate(() => document.querySelectorAll('#view img[src="x"]').length);
+    ok('带标签的卷名不会注入 DOM', injected === 0, 'injected=' + injected);
+    const names = await p.locator('.book-name').allTextContents();
+    ok('卷名按文本正常显示', names.some((t) => t.includes('<img')), names.join(' | '));
+    ok('XSS 场景无脚本报错', errs.length === 0, errs.join(' | '));
+
+    /* 主题：顶栏切换必须同时改 theme 与 paper */
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(300);
+    const themeBtn = await p.locator('[data-action="toggle-theme"]').count();
+    if (themeBtn) {
+      await p.click('[data-action="toggle-theme"]');
+      await p.waitForTimeout(250);
+      const st1 = await readState(p);
+      ok('顶栏切夜间时纸色同步变夜墨', st1.settings.theme === 'night' && st1.settings.paper === 'night',
+        JSON.stringify(st1.settings));
+      await p.click('[data-action="toggle-theme"]');
+      await p.waitForTimeout(250);
+      const st2 = await readState(p);
+      ok('切回日光时纸色恢复', st2.settings.theme === 'day' && st2.settings.paper !== 'night',
+        JSON.stringify(st2.settings));
+    } else {
+      ok('顶栏切夜间时纸色同步变夜墨', false, '找不到主题按钮');
+      ok('切回日光时纸色恢复', false, '找不到主题按钮');
+    }
+    await ctx.close();
+  }
+
+  /* ---------- 19. 快捷键与 reduced-motion ---------- */
+  {
+    const { ctx, p, errs } = await scene(browser, seeded({
+      settings: { pageMode: 'flip', flipAnim: 'realistic', fs: 24, lh: 2.8 }
+    }));
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    await p.waitForTimeout(300);
+    const foot = () => p.evaluate(() => parseInt(document.querySelector('#flipFoot b').textContent, 10));
+    const f0 = await foot();
+    await p.keyboard.press('Alt+ArrowLeft');
+    await p.waitForTimeout(400);
+    ok('Alt+← 不会翻页', (await foot()) === f0, 'f0=' + f0 + ' now=' + (await foot()));
+    /* 焦点落在原生按钮上按空格，浏览器自己激活，不该再翻一页 */
+    await p.evaluate(() => document.querySelector('[data-action="reader-settings"]').focus());
+    await p.keyboard.press('Space');
+    await p.waitForTimeout(450);
+    ok('按钮聚焦时空格不误翻页', (await foot()) === f0, 'now=' + (await foot()));
+    ok('快捷键场景无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+  {
+    const { ctx, p, errs } = await scene(browser, seeded({
+      settings: { pageMode: 'flip', flipAnim: 'realistic', fs: 24, lh: 2.8 }
+    }));
+    await p.emulateMedia({ reducedMotion: 'reduce' });
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    await p.waitForTimeout(300);
+    const r = await p.locator('#readerBody').boundingBox();
+    const f0 = await p.evaluate(() => parseInt(document.querySelector('#flipFoot b').textContent, 10));
+    await p.mouse.click(r.x + r.width * 0.86, r.y + r.height * 0.4);
+    await p.waitForTimeout(90);
+    const using3D = await p.evaluate(() => document.querySelector('#readerPaper').classList.contains('realistic'));
+    await p.waitForTimeout(300);
+    const f1 = await p.evaluate(() => parseInt(document.querySelector('#flipFoot b').textContent, 10));
+    ok('减少动态效果时不再播 3D 翻页', !using3D, '3D=' + using3D);
+    ok('减少动态效果时仍能翻页', f1 === f0 + 1, f0 + '->' + f1);
+    ok('动效偏好场景无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
   await browser.close();
   console.log('\n数据安全 / 兼容专项：' + pass + ' PASS / ' + fail + ' FAIL');
   if (fail) process.exit(1);

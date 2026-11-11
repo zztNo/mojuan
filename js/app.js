@@ -192,13 +192,19 @@
         const id = 'local-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
         const pal = LOCAL_COLORS[ok % LOCAL_COLORS.length];
         const first = (chapters[0].paras[0] || '').slice(0, 60);
+        /* 文件名 / EPUB dc:title 可能带 < > &，源头就换成全角，
+           否则后面模板里的 ${b.title} 会把标签插进 DOM */
+        const cleanMeta = (v) => String(v || '').replace(/[<>&]/g,
+          (c) => ({ '<': '〈', '>': '〉', '&': '＆' }[c]));
+        const bookTitle = cleanMeta(r.title || short);
+        const bookAuthor = cleanMeta(r.author || '本地导入');
         const meta = {
-          id, local: true, title: r.title || short, author: r.author || '本地导入',
+          id, local: true, title: bookTitle, author: bookAuthor,
           category: '本地', status: '本地', tags: ['本地导入', (r.ext || 'txt').toUpperCase()],
           words: chars >= 10000 ? (chars / 10000).toFixed(1) + '万' : chars + '字',
           score: 9.0, readers: '本地卷', hot: 60,
           motif: LOCAL_MOTIFS[ok % LOCAL_MOTIFS.length], color: pal[0], color2: pal[1],
-          seal: (r.title || '卷').replace(/[《》\s]/g, '').charAt(0) || '卷',
+          seal: bookTitle.replace(/[《》\s]/g, '').charAt(0) || '卷',
           desc: '由本地文件导入，共 ' + chapters.length + ' 章。' + (first ? first + '…' : ''),
           chapters: chapters.map((c) => c.title), addedAt: now
         };
@@ -342,12 +348,17 @@
     try { return normalizeState(JSON.parse(localStorage.getItem(KEY) || '{}')); }
     catch (e) { return structuredClone(DEFAULTS); }
   }
-  let saveWarned = false;
+  let saveWarned = false, saveWarnAt = 0;
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); return true; }
     catch (e) {
-      /* 配额写满时别不吭声：至少要告诉用户这次改动没存下 */
-      if (!saveWarned) { saveWarned = true; try { toast('本地存储已满，这次的改动没能保存'); } catch (_) { /* 忽略 */ } }
+      /* 配额满之后不能只提醒一次：此后每次改动都会静默丢失，页面却照常显示「已保存」。
+         5 秒节流一下，避免高频操作刷屏。 */
+      const now = Date.now();
+      if (!saveWarned || now - saveWarnAt > 5000) {
+        saveWarned = true; saveWarnAt = now;
+        try { toast('本地存储已满，这次改动没能保存；可先导出备份再清理封面'); } catch (_) { /* 忽略 */ }
+      }
       return false;
     }
   }
@@ -467,7 +478,7 @@
       ? `<div class="cover-photo" style="background-image:url('${pic}')"></div>`
       : D.motifSvg(o.motif || b.motif, o.color || b.color, o.color2 || b.color2, uid);
     const text = o.hideText ? '' : `<div class="cover-mark">墨卷藏书</div>
-      <div class="cover-title${tcls}">${b.title}</div>
+      <div class="cover-title${tcls}">${esc(b.title)}</div>
       <div class="cover-author">${b.author}</div>
       <div class="cover-seal">${o.seal || b.seal}</div>`;
     return `<div class="cover ${pic ? 'has-photo' : ''}">${art}<i class="cover-grain" aria-hidden="true"></i>${text}</div>`;
@@ -930,7 +941,7 @@
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
     return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}" data-sc="${esc((b.category || '').toLowerCase())}">
       <div class="cover-wrap">${coverHtml(b)}${badge}${pick}${quick}</div>
-      <div class="book-name">${b.title}</div>
+      <div class="book-name">${esc(b.title)}</div>
       <div class="book-meta"><span class="bm-text">${b.author} · ${b.category}</span>${miniTags(b)}</div>
       ${prog}
     </div>`;
@@ -1098,7 +1109,7 @@
       <div style="position:absolute;inset:0;z-index:0;background:linear-gradient(90deg,rgba(12,16,14,.58) 30%,rgba(12,16,14,.08))"></div>
       <div class="banner-inner">
         <div class="banner-tag">${b.tag}</div>
-        <h2>${b.title}</h2><p>${b.sub}</p>
+        <h2>${esc(b.title)}</h2><p>${esc(b.sub || '')}</p>
         <button class="btn btn-primary btn-sm" data-action="open-book" data-id="${b.book}">开卷细读 ${icon('right', 'ic-sm')}</button>
       </div>
       ${bk ? `<div class="banner-cover" data-action="open-book" data-id="${bk.id}">${coverHtml(bk)}</div>` : ''}
@@ -1302,7 +1313,7 @@
       </div>
       <div class="detail-info">
         <div class="muted" style="font-size:11px;letter-spacing:.2em">${b.category} · ${b.status}</div>
-        <h1>${b.title}</h1>
+        <h1>${esc(b.title)}</h1>
         <div class="detail-byline">${b.author} · ${b.local ? '本地导入' : (b.online ? '维基文库' : '墨卷公版')}</div>
         <div class="detail-stats">
           <div class="stat"><b>${chapters.length}</b><span>篇目</span></div>
@@ -1475,7 +1486,7 @@
         <div class="setting-list">
           ${state.localBooks.map((b) => `<div class="setting-row">
             <div class="local-thumb" style="background:${b.color}">${b.seal}</div>
-            <div class="st" style="cursor:pointer" data-action="open-book" data-id="${b.id}">《${b.title}》<small>${b.chapters.length} 章 · ${b.words} · ${b.author}</small></div>
+            <div class="st" style="cursor:pointer" data-action="open-book" data-id="${b.id}">《${esc(b.title)}》<small>${b.chapters.length} 章 · ${esc(b.words || '')} · ${esc(b.author || '')}</small></div>
             <button class="btn btn-ghost btn-sm btn-danger" data-action="delete-local" data-id="${b.id}">删除</button>
           </div>`).join('')}
         </div>
@@ -1679,6 +1690,19 @@
         </div>
       </div>
     </div>`;
+  }
+  /* 顶栏与阅读器共用一套夜间切换：theme 与 paper 必须同步，
+     否则书城是夜墨、阅读器纸色还是浅的（或反过来）。 */
+  function toggleNight() {
+    const night = state.settings.theme !== 'night';
+    if (night) {
+      if (state.settings.paper !== 'night') state.settings.lastDayPaper = state.settings.paper || 'xuan';
+      state.settings.paper = 'night';
+    } else state.settings.paper = state.settings.lastDayPaper || 'xuan';
+    state.settings.theme = night ? 'night' : 'day';
+    save(); applyTheme();
+    if ($('#reader')) { applyReaderStyle(); syncReaderMenu(); }
+    return night;
   }
   function applyReaderStyle() {
     const r = $('#reader'); if (!r) return;
@@ -1939,6 +1963,11 @@
   })();
   function animMode() {
     const a = state.settings.flipAnim;
+    /* CSS 的 reduced-motion 只压得住 CSS 动画；翻页用的是 Element.animate()，
+       得在这里一并关掉，别让开了「减少动态效果」的用户仍被 240ms 动画晃到 */
+    try {
+      if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return 'none';
+    } catch (_) { /* 老 WebView 没有 matchMedia */ }
     /* 老 WebView 撑不起 3D：静默退回整页滑动，别让翻页直接失效 */
     return a === 'realistic' && !REAL_3D_OK ? 'slide' : a;
   }
@@ -2910,11 +2939,9 @@
     const now = Date.now();
     if (!force && now - lastCommit < 1200) return;
     lastCommit = now;
-    state.progress[listen.bookId] = {
-      ch: listen.ch,
-      pct: Math.min(0.999, listen.charIndex / listen.text.length),
-      updated: now
-    };
+    /* 不再写 state.progress：那里是阅读器的「页码/滚动比例」，
+       听书的「字符比例」写进去会让 paginateAndRender / 卷签定位跳错位置。
+       听书位置只存 listenPos；阅读进度由翻页 / 滚动自己维护。 */
     state.lastRead = listen.bookId;
     if (!state.listenPos) state.listenPos = {};
     state.listenPos[listen.bookId] = {
@@ -2978,19 +3005,31 @@
   }
   function audioPrune(limitKB) {
     const max = limitKB || 120 * 1024;   /* 120MB 上限 */
-    audioIDB('readonly', (st) => st.getAll()).then((list) => {
-      if (!list || !list.length) return;
+    /* 原来一次性把全部音频 Blob 读回内存再算总量；
+       改成 openCursor 逐条只记 key / ts / size，峰值内存不再随缓存大小涨。 */
+    openAudioDB().then((db) => {
+      if (!db) return;
+      const rows = [];
       let total = 0;
-      list.forEach((r) => { total += (r && r.blob ? r.blob.size : 0) / 1024; });
-      if (total <= max) return;
-      const keys = audioIDB('readonly', (st) => st.getAllKeys());
-      Promise.resolve(keys).then((ks) => {
-        if (!ks) return;
-        const rows = ks.map((k, i) => ({ k, ts: (list[i] || {}).ts || 0 })).sort((a, b) => a.ts - b.ts);
-        const drop = Math.max(1, Math.ceil(rows.length * 0.25));
-        rows.slice(0, drop).forEach((r) => audioIDB('readwrite', (st) => st.delete(r.k)));
-      });
-    });
+      const tx = db.transaction('clips', 'readonly');
+      const cur = tx.objectStore('clips').openCursor();
+      cur.onsuccess = (ev) => {
+        const c = ev.target.result;
+        if (!c) {
+          try { db.close(); } catch (_) {}
+          if (total <= max || !rows.length) return;
+          const drop = Math.max(1, Math.ceil(rows.length * 0.25));
+          rows.sort((a, b) => a.ts - b.ts).slice(0, drop)
+            .forEach((r) => audioIDB('readwrite', (st) => st.delete(r.k)));
+          return;
+        }
+        const v = c.value || {};
+        total += v.blob ? v.blob.size / 1024 : 0;
+        rows.push({ k: c.key, ts: v.ts || 0 });
+        c.continue();
+      };
+      cur.onerror = () => { try { db.close(); } catch (_) {} };
+    }).catch(() => { /* IDB 不可用时直接跳过清理 */ });
   }
   async function listenSynth(text) {
     const key = listenCacheKey(text);
@@ -3232,7 +3271,6 @@
     }
     listenLoadText();
     if (state.listenPos) delete state.listenPos[listen.bookId]; /* 换章从头听 */
-    state.progress[listen.bookId] = { ch: listen.ch, pct: 0, updated: Date.now() };
     save();
     renderListen();
     if (autoplay || listen.playing) listenSpeak(false);
@@ -3443,13 +3481,30 @@
   function voiceCacheInfo() {
     const el = document.getElementById('vfCacheSize');
     if (!el) return;
-    audioIDB('readonly', (st) => st.getAll()).then((list) => {
-      if (!list || !list.length) { el.textContent = '听书音频缓存：还没有'; return; }
-      let sz = 0;
-      list.forEach((r) => { sz += r && r.blob ? r.blob.size : 0; });
-      el.textContent = '听书音频缓存：' + list.length + ' 句 · '
-        + (sz >= 1048576 ? (sz / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(sz / 1024)) + ' KB');
-    });
+    /* 只统计大小，别把上百 MB 音频整批读回内存：用游标逐条累加 */
+    openAudioDB().then((db) => {
+      if (!db) { el.textContent = '听书音频缓存：不可用'; return; }
+      let n = 0, sz = 0;
+      const cur = db.transaction('clips', 'readonly').objectStore('clips').openCursor();
+      cur.onsuccess = (ev) => {
+        const c = ev.target.result;
+        if (!c) {
+          try { db.close(); } catch (_) {}
+          el.textContent = n
+            ? '听书音频缓存：' + n + ' 句 · '
+              + (sz >= 1048576 ? (sz / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(sz / 1024)) + ' KB')
+            : '听书音频缓存：还没有';
+          return;
+        }
+        n += 1;
+        sz += c.value && c.value.blob ? c.value.blob.size : 0;
+        c.continue();
+      };
+      cur.onerror = () => {
+        try { db.close(); } catch (_) {}
+        el.textContent = '听书音频缓存：统计失败';
+      };
+    }).catch(() => { el.textContent = '听书音频缓存：不可用'; });
   }
   function voiceModalHtml() {
     const v = VOICE(); if (!v) return '';
@@ -3709,6 +3764,7 @@
       flipState = { pages, page, id: b.id, ch };
       renderFlipPage(dir || '');
     } else {
+      ui.flipTargetPage = null; /* 滚动分支不消费它，留着会污染下次切回翻页模式 */
       if (pr && pr.ch === ch && pr.pct > 0) body.scrollTop = pr.pct * (body.scrollHeight - body.clientHeight);
       updateReaderSeek();
       syncBookmarkBtn();
@@ -4346,10 +4402,11 @@
       case 'go-store': go('store'); break;
       case 'go-rank': go('store/rank'); break;
       case 'history-back': history.length > 1 ? history.back() : go('store'); break;
-      case 'toggle-theme':
-        state.settings.theme = state.settings.theme === 'night' ? 'day' : 'night';
-        save(); applyTheme(); rerender();
-        toast(state.settings.theme === 'night' ? '已切换夜墨模式' : '已回到宣纸日光'); break;
+      case 'toggle-theme': {
+        const night = toggleNight();
+        rerender();
+        toast(night ? '已切换夜墨模式' : '已回到宣纸日光'); break;
+      }
       case 'open-book': go('book/' + id); break;
       case 'toggle-source': {
         const s = SRC.get(id); if (!s) break;
@@ -4967,13 +5024,7 @@
         break;
       }
       case 'reader-theme-toggle': {
-        const night = state.settings.paper !== 'night';
-        if (night) {
-          state.settings.lastDayPaper = state.settings.paper === 'night' ? (state.settings.lastDayPaper || 'xuan') : state.settings.paper;
-          state.settings.paper = 'night';
-        } else state.settings.paper = state.settings.lastDayPaper || 'xuan';
-        state.settings.theme = night ? 'night' : 'day';
-        save(); applyTheme(); applyReaderStyle(); syncReaderMenu();
+        const night = toggleNight();
         $$('#readerPanel .rs-pill').forEach((p) => {
           if (p.dataset.action === 'set-paper') p.classList.toggle('active', p.dataset.val === state.settings.paper);
         });
@@ -5127,6 +5178,8 @@
     if (e.target.id === 'noteBookFilter') { ui.noteBook = e.target.value; applyNoteFilter(); }
   });
   document.addEventListener('keydown', (e) => {
+    /* Alt+←、Ctrl+P 等系统/浏览器组合键一律不抢 */
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     /* 模态面板打开时把 Tab 关在里面，别让焦点跑回底下的正文 */
     if (e.key === 'Tab') {
       const drawer = $('#catalogDrawer'), panel = $('#readerPanel'), sd = $('#searchDrawer');
@@ -5200,6 +5253,8 @@
           return;
         }
       }
+      /* 焦点在原生按钮/链接上按空格，浏览器会自己激活它，别顺手再翻一页 */
+      if (e.key === ' ' && /BUTTON|A|SELECT|INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
       const paging = state.settings.pageMode === 'flip' && $('#reader');
       if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         paging ? flipBy(-1) : switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1);
