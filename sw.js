@@ -1,18 +1,28 @@
+// content-hash: 0c26b78bf887
 /* 墨卷 · 离线缓存 */
-const CACHE = 'mojuan-v53';
+const CACHE = 'mojuan-v54';
 const ASSETS = [
-  './', './index.html', './css/style.css',
-  './js/data.js', './js/sources.js', './js/classics-meta.js', './js/classics.js',
-  './js/wikisource-clean.js', './js/source-wikisource.js', './js/voices.js', './js/importer.js', './js/app.js',
-  './manifest.webmanifest', './icons/favicon.svg',
-  './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
+  './',
+  './index.html',
+  './js/data.js',
+  './js/sources.js',
+  './js/classics-meta.js',
+  './js/classics.js',
+  './js/wikisource-clean.js',
+  './js/source-wikisource.js',
+  './js/voices.js',
+  './js/importer.js',
+  './js/app.js',
+  './icons/favicon.svg',
+  './icons/icon-192.png',
+  './manifest.webmanifest',
+  './css/style.css',
+  './icons/icon-512.png',
+  './icons/icon-maskable-512.png',
   './img/paper.webp'
 ];
 /* 正文分片：不在 install 里等，装好后再慢慢补，不拖慢首屏 */
-const SHARDS = ['baijiaxing', 'caocao', 'chuci', 'daodejing', 'daxue', 'dizigui', 'guwen',
-  'huajianji', 'lunyu', 'mengzi', 'nalan', 'nantang', 'qianjia', 'qianzi', 'sanzi',
-  'shenglv', 'shijing', 'shuimo', 'songci300', 'tang300', 'youmengying', 'youxueqionglin',
-  'zengguang', 'zhongyong', 'zhuzi'].map((id) => './js/books/' + id + '.js');
+const SHARDS = ['baijiaxing', 'caocao', 'chuci', 'daodejing', 'daxue', 'dizigui', 'guwen', 'huajianji', 'lunyu', 'mengzi', 'nalan', 'nantang', 'qianjia', 'qianzi', 'sanzi', 'shenglv', 'shijing', 'shuimo', 'songci300', 'tang300', 'youmengying', 'youxueqionglin', 'zengguang', 'zhongyong', 'zhuzi'].map((id) => './js/books/' + id + '.js');
 
 self.addEventListener('install', (e) => {
   /* 逐个缓存：某个路径 404 不应让整个 Service Worker 安装失败 */

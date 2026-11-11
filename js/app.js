@@ -35,7 +35,12 @@
   }
   function allBooks() { return SRC.allBooks().concat(state.localBooks || []); }
   function chapterList(b) {
-    if (b.local) return (b.chapters || []).map((t, i) => ({ no: i + 1, title: t }));
+    /* 老备份 / 损坏记录里本地卷可能是 chapters: []，直接返回空数组会让
+       chapterList(b)[ch-1].title 抛错。给个「全文」兜底，至少能打开。 */
+    if (b.local) {
+      const cs = b.chapters || [];
+      return cs.length ? cs.map((t, i) => ({ no: i + 1, title: t })) : [{ no: 1, title: '全文' }];
+    }
     if (b.chapters && b.chapters.length) return b.chapters;
     return [{ no: 1, title: '全文' }];
   }
@@ -238,7 +243,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', pageMode: 'flip', flipAnim: 'slide', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -287,26 +292,34 @@
     if (ver < 4 && state.settings && (!state.settings.flipAnim || state.settings.flipAnim === 'none')) {
       state.settings.flipAnim = 'slide';
     }
-    state.v = 4;
+    /* v5：「仿真」翻页成为默认。存量用户一次性切过去；之后在设置里改回
+       滑动 / 淡入 / 无动画都会留住，因为版本号已经是 5 了。 */
+    if (ver < 5 && state.settings && state.settings.flipAnim === 'slide') {
+      state.settings.flipAnim = 'realistic';
+    }
+    state.v = 5;
     /* 迁移结果必须立刻落盘：否则用户把种子书重新加回藏卷后，
      * 下次启动又会因为版本号没升级而被当成种子再删一遍。
      * （此处 save() 还没初始化完，直接写 localStorage） */
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* 配额满就下次再说，迁移本身幂等 */ }
   })();
-  function load() {
+  function normalizeState(raw) {
     try {
-      const raw = JSON.parse(localStorage.getItem(KEY) || '{}');
-      return Object.assign({}, structuredClone(DEFAULTS), raw, {
-        settings: Object.assign({}, DEFAULTS.settings, raw.settings || {}),
-        checkin: Object.assign({}, DEFAULTS.checkin, raw.checkin || {}),
-        covers: Object.assign({}, DEFAULTS.covers, raw.covers || {}),
-        bookmarks: Object.assign({}, DEFAULTS.bookmarks, raw.bookmarks || {}),
-        annotations: Object.assign({}, DEFAULTS.annotations, raw.annotations || {}),
-        bookTags: Object.assign({}, DEFAULTS.bookTags, raw.bookTags || {}),
-        pinned: Array.isArray(raw.pinned) ? raw.pinned : [],
-        readLog: Object.assign({}, DEFAULTS.readLog, raw.readLog || {})
+      return Object.assign({}, structuredClone(DEFAULTS), raw || {}, {
+        settings: Object.assign({}, DEFAULTS.settings, (raw || {}).settings || {}),
+        checkin: Object.assign({}, DEFAULTS.checkin, (raw || {}).checkin || {}),
+        covers: Object.assign({}, DEFAULTS.covers, (raw || {}).covers || {}),
+        bookmarks: Object.assign({}, DEFAULTS.bookmarks, (raw || {}).bookmarks || {}),
+        annotations: Object.assign({}, DEFAULTS.annotations, (raw || {}).annotations || {}),
+        bookTags: Object.assign({}, DEFAULTS.bookTags, (raw || {}).bookTags || {}),
+        pinned: Array.isArray((raw || {}).pinned) ? raw.pinned : [],
+        readLog: Object.assign({}, DEFAULTS.readLog, (raw || {}).readLog || {})
       });
     } catch (e) { return structuredClone(DEFAULTS); }
+  }
+  function load() {
+    try { return normalizeState(JSON.parse(localStorage.getItem(KEY) || '{}')); }
+    catch (e) { return structuredClone(DEFAULTS); }
   }
   let saveWarned = false;
   function save() {
@@ -706,7 +719,11 @@
     } catch (e) { return false; }
   }
   /* ---------- 完整备份 / 恢复（含本地卷正文） ---------- */
-  const BACKUP_APP = 'mojuan', BACKUP_VER = 1;
+  const BACKUP_APP = 'mojuan', BACKUP_VER = 2;
+  /* state 之外还有几个独立键：自定义书源（用户手写的代码）、停用的官方源、
+     在线音色（含各家 API key）。这些丢了没法重建，必须一起进备份，
+     恢复时回写、重置时清掉。目录缓存属于可重建缓存，不进备份但重置会清。 */
+  const EXTRA_KEYS = ['mojuan.sources.custom', 'mojuan.sources.off', 'mojuan.voice.v1'];
   function collectContents() {
     return new Promise((res) => {
       const out = {};
@@ -733,13 +750,18 @@
   async function exportBackup() {
     toast('正在整理备份…');
     const contents = await collectContents();
+    const extras = {};
+    EXTRA_KEYS.forEach((k) => {
+      try { const v = localStorage.getItem(k); if (v != null) extras[k] = v; } catch (e) { /* 存储不可用 */ }
+    });
     const payload = {
       app: BACKUP_APP, version: BACKUP_VER, exportedAt: new Date().toISOString(),
-      state, contents
+      state, contents, extras
     };
     const ok = downloadText('墨卷备份-' + today() + '.json', JSON.stringify(payload));
     toast(ok
       ? '备份已导出 · 含 ' + Object.keys(contents).length + ' 卷本地卷正文'
+        + (Object.keys(extras).length ? '、书源与音色配置' : '')
       : '导出失败，请检查浏览器下载权限');
   }
   async function restoreBackup(text) {
@@ -749,38 +771,67 @@
     if (!obj || obj.app !== BACKUP_APP || !obj.state || typeof obj.state !== 'object') {
       toast('这不是墨卷备份文件'); return;
     }
+    if (Number(obj.version) > BACKUP_VER) {
+      toast('这份备份来自更新版本的墨卷，请先升级后再恢复'); return;
+    }
     const contents = obj.contents || {};
+    const extras = (obj.extras && typeof obj.extras === 'object') ? obj.extras : {};
     const n = Object.keys(contents).length;
-    if (!confirm('确定从这份备份恢复吗？\n\n将覆盖当前的藏卷、进度、卷签、划线批注、封面、设置，以及 ' + n + ' 卷本地卷正文。此操作不可撤销。')) return;
-    try {
-      localStorage.setItem(KEY, JSON.stringify(obj.state));
-      try {
-        const del = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && k.indexOf(LS_PREFIX) === 0) del.push(k);
-        }
-        del.forEach((k) => localStorage.removeItem(k));
-      } catch (e) { /* 忽略 */ }
-      let idbOK = false;
+    if (!confirm('确定从这份备份恢复吗？\n\n将覆盖当前的藏卷、进度、卷签、划线批注、封面、设置、书源与音色配置，以及 ' + n + ' 卷本地卷正文。此操作不可撤销。')) return;
+
+    /* 先落正文，再覆盖 state：任何一步失败，旧的 state 和旧正文都还在。
+       IDB 事务本身是原子的，所以不做 clear() —— 只 put 新键、删掉备份里
+       没有的旧键；一旦事务中止浏览器自动回滚，不会把本地卷清空。 */
+    const putIDB = async () => {
       try {
         const db = await openDB();
         await new Promise((res, rej) => {
           const tx = db.transaction('books', 'readwrite');
           const st = tx.objectStore('books');
-          st.clear();
           Object.keys(contents).forEach((k) => st.put(contents[k], k));
+          const stale = [];
+          const cur = st.openKeyCursor();
+          cur.onsuccess = (ev) => {
+            const c = ev.target.result;
+            if (!c) { stale.forEach((k) => st.delete(k)); return; }
+            if (!(String(c.key) in contents)) stale.push(c.key);
+            c.continue();
+          };
           tx.oncomplete = () => res();
-          tx.onerror = () => rej(tx.error);
+          tx.onerror = () => rej(tx.error || new Error('正文写入失败'));
+          tx.onabort = () => rej(tx.error || new Error('事务被中止'));
         });
         try { db.close(); } catch (e) {}
-        idbOK = true;
-      } catch (e) { /* file:// 下 IDB 不可用，走 localStorage 降级 */ }
-      if (!idbOK) {
-        Object.keys(contents).forEach((k) => {
-          try { localStorage.setItem(LS_PREFIX + k, JSON.stringify(contents[k])); } catch (e) { /* 容量不足忽略 */ }
-        });
-      }
+        return true;
+      } catch (e) { return false; }
+    };
+    const putLS = () => {
+      try {
+        Object.keys(contents).forEach((k) => localStorage.setItem(LS_PREFIX + k, JSON.stringify(contents[k])));
+        const del = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf(LS_PREFIX) === 0 && !(k.slice(LS_PREFIX.length) in contents)) del.push(k);
+        }
+        del.forEach((k) => localStorage.removeItem(k));
+        return true;
+      } catch (e) { return false; }
+    };
+    try {
+      const idbOK = await putIDB();
+      if (!idbOK && !putLS()) { toast('恢复失败：本地卷正文无法写入，原有数据未改动'); return; }
+      /* 用与启动加载同一套规范化，缺字段的旧备份也不会让页面崩。
+         内存里的 state 必须一起换：否则 reload 时 pagehide 的 flushSave()
+         会把旧 state 写回 localStorage，刚恢复的数据瞬间被覆盖回去。 */
+      const merged = normalizeState(obj.state);
+      state = merged;
+      localStorage.setItem(KEY, JSON.stringify(state));
+      EXTRA_KEYS.forEach((k) => {
+        try {
+          if (extras[k] != null) localStorage.setItem(k, extras[k]);
+          else localStorage.removeItem(k);
+        } catch (e) { /* 单个配置失败不影响主体 */ }
+      });
       toast('恢复完成，正在重新载入…');
       setTimeout(() => location.reload(), 600);
     } catch (e) {
@@ -964,13 +1015,24 @@
           <button class="${state.viewMode === 'list' ? 'active' : ''}" data-action="toggle-view" data-val="list" title="列表">${icon('listview', 'ic-sm')}</button>
         </div>
       </div></div>`;
+    /* 比较器里原来每次都线性查 getBook / indexOf，几百卷时是 O(n² log n)。
+       先把排序用到的字段建成 Map，比较器只读表。 */
+    const shelfPos = new Map((state.shelf || []).map((id, i) => [id, i]));
+    const sortMeta = new Map(shelf.map((it) => {
+      const g = getBook(it.id) || it;
+      return [it.id, {
+        title: g.title || it.title || '',
+        pinned: state.pinned.includes(it.id) ? 1 : 0,
+        pos: shelfPos.has(it.id) ? shelfPos.get(it.id) : 0,
+        updated: (state.progress[it.id] || {}).updated || 0
+      }];
+    }));
     let order = shelf.slice().sort((a, b) => {
-      const pa = state.pinned.includes(a.id) ? 1 : 0, pb = state.pinned.includes(b.id) ? 1 : 0;
-      if (pa !== pb) return pb - pa;
-      if (ui.shelfSort === 'name') return (getBook(a.id) || {}).title < (getBook(b.id) || {}).title ? -1 : 1;
-      if (ui.shelfSort === 'added') return state.shelf.indexOf(a.id) - state.shelf.indexOf(b.id);
-      const ua = (state.progress[a.id] || {}).updated || 0, ub = (state.progress[b.id] || {}).updated || 0;
-      return ub - ua;
+      const x = sortMeta.get(a.id), y = sortMeta.get(b.id);
+      if (x.pinned !== y.pinned) return y.pinned - x.pinned;
+      if (ui.shelfSort === 'name') return x.title < y.title ? -1 : 1;
+      if (ui.shelfSort === 'added') return x.pos - y.pos;
+      return y.updated - x.updated;
     });
     if (ui.shelfFilter !== 'all') order = order.filter((b) => state.bookTags[b.id] === ui.shelfFilter);
     /* 搜索不在这里裁 order：重渲染若按关键词删卡片，之后删字放宽搜索就再也恢复不了。
@@ -1457,7 +1519,7 @@
     }
     html += `<div class="section">${sectionHead('卷档管理', '', '')}
       <div class="setting-list">
-        <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、卷签、划线批注、封面、设置与本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、笔记、封面、设置、自定义书源与在线音色、本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-backup">${icon('book')}<div class="st">从备份恢复<small>选择之前导出的 .json，会覆盖当前所有数据</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>${noteFilterActive() ? '按「我的笔记」当前的搜索 / 按卷 / 颜色筛选导出' : '把所有卷的笔记整理成一个 TXT'}，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
@@ -2636,7 +2698,8 @@
         const at = offset + m.index;
         if (seg.length > 90) {
           let cursor = 0;
-          seg.split(/(?<=[，、：,:])/).forEach((piece) => {
+          /* 不用后顾断言：旧 Safari / 老 WebView 解析整段脚本时会直接抛 SyntaxError */
+          (seg.match(/[^，、：,:]*[，、：,:]|[^，、：,:]+/g) || []).forEach((piece) => {
             if (!piece) return;
             sents.push({ t: piece, start: at + cursor, para: pi });
             cursor += piece.length;
@@ -4442,8 +4505,20 @@
       case 'reset-data':
         if (confirm('确定清空藏卷、进度、设置和已导入的本地卷吗？此操作不可撤销。')) {
           const ids = state.localBooks.map((b) => b.id);
-          localStorage.removeItem(KEY); state = structuredClone(DEFAULTS); save();
+          /* 所有 mojuan.* 键一起清：自定义书源、停用的源、在线音色 key、目录缓存
+             原来都会残留，用户以为「清空」了其实还留着配置和大块缓存。 */
+          try {
+            const del = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k && (k === KEY || k.indexOf('mojuan.') === 0)) del.push(k);
+            }
+            del.forEach((k) => localStorage.removeItem(k));
+          } catch (e) { /* 存储不可用 */ }
+          state = structuredClone(DEFAULTS); state.v = 5; save();
           ids.forEach((x) => { deleteContent(x).catch(() => {}); delete contentCache[x]; });
+          /* 听书音频缓存是另一个 IndexedDB，不清会白占几十 MB */
+          try { indexedDB.deleteDatabase(AUDIO_DB); } catch (e) {}
           applyTheme(); go('shelf'); toast('已恢复初始状态');
         }
         break;
@@ -4920,7 +4995,10 @@
       if (ui.metaDraft) { closeMetaEditor(); return; }
       if ($('#shelfMenu')) { closeShelfMenu(); return; }
       if (listen.active) { listenStopAll(); return; }
-      if (!$('#searchDrawer').hidden) { closeReaderSearch(); return; }
+      /* 书城 / 藏卷页压根没有 #searchDrawer，不判空会抛 TypeError，
+         把整个 keydown 处理器打断，连 ?、Enter、翻页键都一起失效 */
+      const sd = $('#searchDrawer');
+      if (sd && !sd.hidden) { closeReaderSearch(); return; }
       if (ui.searchNavOn) { closeSearchNav(); return; }
       /* 目录 / 卷签 / 笔记抽屉也算「面板」，Esc 先收它，别一按就退出阅读器 */
       const panel = $('#readerPanel'), drawer = $('#catalogDrawer');

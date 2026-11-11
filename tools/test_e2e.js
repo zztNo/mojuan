@@ -22,7 +22,7 @@ const seed = (extra) => {
   if (sessionStorage.getItem('mj-seed')) return;
   sessionStorage.setItem('mj-seed', '1');
   localStorage.setItem('mojuan.state.v1', JSON.stringify(Object.assign({
-    v: 4, shelf: ['shijing', 'daodejing'], settings: { pageMode: 'scroll' },
+    v: 5, shelf: ['shijing', 'daodejing'], settings: { pageMode: 'scroll' },
     progress: { shijing: { ch: 1, pct: 0, updated: 1 }, daodejing: { ch: 1, pct: 0, updated: 1 } }
   }, extra || {})));
 };
