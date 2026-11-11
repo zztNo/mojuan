@@ -4,27 +4,30 @@
 
 ## 📦 怎么拿到 / 怎么装
 
-Release 附件里准备了两种方式，按需取（桌面 exe 本次未重打，需要的话到 [v1.1.0 Release](https://github.com/zztNo/mojuan/releases/tag/v1.1.0) 取）：
+Release 附件里有两个文件，按需取：
 
 | 文件 | 适合谁 | 说明 |
 |------|--------|------|
 | **mojuan-offline.html** | 想直接读、想分享的人 | 所有资源内联进一个 HTML，**双击就能读**，也方便发给朋友。 |
-| **mojuan-unsigned.apk** | 安卓手机用户 | PWABuilder 出的 TWA 包，首次联网加载后离线可用。安装时若提示「未知来源」，在系统设置允许该安装器一次即可（未签名，没上架商店）。 |
+| **mojuan-unsigned.apk** | 安卓手机用户 | 装到手机上用，首次联网加载后离线可用。安装时若提示「未知来源」，在系统设置里允许一次即可（未签名，没上架商店）。 |
+
+> APK 已按 v1.1.1 重新打包（包内版本 1.1.1，`versionCode 2`）：装过旧版的可直接覆盖安装，进度和书架都保留，不用先卸载。
 
 ### 💡 推荐：装成原生 App（零拦截、离线可用）
 
-墨卷本身是标准 PWA，不用应用商店就能当独立窗口应用：
+墨卷本身是标准 PWA，不用应用商店就能当独立窗口应用，比下载安装包更省事：
 
 - **桌面（Win / Mac）**：用 Edge 或 Chrome 打开在线版 `https://zztNo.github.io/mojuan/`（或本地 `http://localhost:8080/mojuan-offline.html`），地址栏点「安装」即可。
   - ⚠️ 别用 `file://` 双击打开再装——浏览器只认 `http(s)` 或 `localhost` 源，`file://` 装不了。
 - **手机**：iOS 用 Safari「添加到主屏幕」；安卓用 Chrome「安装应用」。
 - 装好后首次联网拉取，之后离线也能进书架、读 25 卷内置离线书（维基文库 83 部在线古籍取正文仍需联网）。
 
-### 🪟 Windows 用户特别说明
+### 🪟 Windows 用户看这里
 
-- **最省事**：上面那种 PWA 安装，不用下载任何文件、不用签名、Defender 完全不碰，强烈推荐。
-- **想要商店入口（可选）**：可以用 PWABuilder 把墨卷提交到 Microsoft Store，微软在认证时**免费签名**，用户从商店装完全无拦截；代价是一次性 **$19** 开发者账号 + 过商店认证，比买代码签名证书现实得多。
-- **exe 不主推**：桌面便携版停在 [v1.1.0 Release](https://github.com/zztNo/mojuan/releases/tag/v1.1.0) 的 `mojuan-1.1.0-portable.exe`（本次没有再打包），仅留给愿意手动放行（「更多信息 → 仍要运行」或加排除项）的用户。
+- **装 PWA 就够了**：不用下载任何文件、不用签名，Defender 和 SmartScreen 都不会拦，装好后从开始菜单或桌面直接打开。
+- **想要商店入口（可选）**：也可以用 PWABuilder 把墨卷提交到 Microsoft Store，从商店装完全无拦截；这一步只对想上架的开发者有意义，普通读者跳过即可。
+
+> 桌面便携版 exe 自 v1.1.0 起不再随新版本发布，最后一版在 [v1.1.0 Release](https://github.com/zztNo/mojuan/releases/tag/v1.1.0)；没有代码签名，第一次运行会被 SmartScreen 拦一次（点「更多信息 → 仍要运行」就能开，不是病毒）。
 
 > 完整图文步骤见仓库 `PWA_INSTALL_GUIDE.md`。
 
