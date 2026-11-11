@@ -414,6 +414,28 @@
     try { return normalizeState(JSON.parse(localStorage.getItem(KEY) || '{}')); }
     catch (e) { return structuredClone(DEFAULTS); }
   }
+  /* localStorage 每源上限：Chrome 约 500 万字符（UTF-16），这里按字符数估，
+     只用来分「宽裕 / 偏紧 / 已满」三档，不给用户一个假的精确总量。 */
+  const LS_LIMIT = 5000000;
+  function storageStats() {
+    let chars = 0, coverChars = 0, coverN = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || k.indexOf('mojuan.') !== 0) continue;
+        chars += k.length + (localStorage.getItem(k) || '').length;
+      }
+    } catch (e) { return null; }
+    Object.keys(state.covers || {}).forEach((id) => {
+      const c = state.covers[id];
+      if (c && c.image) { coverN += 1; coverChars += c.image.length; }
+    });
+    return { chars, coverChars, coverN, ratio: chars / LS_LIMIT };
+  }
+  function fmtBytes(bytes) {
+    const mb = bytes / 1024 / 1024;
+    return mb >= 0.1 ? mb.toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+  }
   let saveWarned = false, saveWarnAt = 0;
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); return true; }
@@ -421,9 +443,10 @@
       /* 配额满之后不能只提醒一次：此后每次改动都会静默丢失，页面却照常显示「已保存」。
          5 秒节流一下，避免高频操作刷屏。 */
       const now = Date.now();
+      ui.storageFull = true;
       if (!saveWarned || now - saveWarnAt > 5000) {
         saveWarned = true; saveWarnAt = now;
-        try { toast('本地存储已满，这次改动没能保存；可先导出备份再清理封面'); } catch (_) { /* 忽略 */ }
+        try { toast('本地存储已满，这次改动没能保存；可到「墨斋 · 卷档管理」导出备份并清理封面图'); } catch (_) { /* 忽略 */ }
       }
       return false;
     }
@@ -447,7 +470,7 @@
     noteMulti: false, notePicked: new Set(),
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
     bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
-    tocLoading: false, tocFailed: false
+    tocLoading: false, tocFailed: false, storageFull: false
   };
   let readerSession = null;
   let lastFocus = null;   /* { hash, key }：跨页返回时把焦点还给原来那个控件 */
@@ -1672,6 +1695,25 @@
     }
     html += `<div class="section">${sectionHead('卷档管理', '', '')}
       <div class="setting-list">
+        ${(function storageRow() {
+          const st = storageStats();
+          if (!st) return '';
+          /* 三档：已满（save 失败过）> 偏紧（>75%）> 宽裕。
+             封面图是最容易撑爆配额的一块，单独报出来，并给一个一键清理。 */
+          const full = !!ui.storageFull || st.ratio >= 1;
+          const tight = !full && st.ratio >= 0.75;
+          const tip = full ? '已写不进去，先导出备份再清理'
+            : tight ? '接近浏览器上限，建议清理或导出备份'
+              : '余量充足';
+          /* 封面超过总量两成时才报具体占用，否则「已用 0.1 MB · 封面图占 0.1 MB」
+             这种重复数字对用户没有信息量。 */
+          const coverHeavy = st.coverN > 0 && st.coverChars > st.chars * 0.2;
+          const canClean = st.coverN > 0 && (full || tight);
+          return `<div class="setting-row${full ? ' storage-full' : tight ? ' storage-tight' : ''}">
+            ${icon('clock')}<div class="st">本地存储<small>已用 ${fmtBytes(st.chars * 2)}${st.coverN ? ' · 封面图 ' + st.coverN + ' 张' : ''}${coverHeavy ? '（占 ' + fmtBytes(st.coverChars * 2) + '）' : ''} · ${tip}</small></div>
+            ${canClean ? `<button class="btn btn-ghost btn-sm" data-action="clean-covers">清理封面</button>` : ''}
+          </div>`;
+        })()}
         <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、笔记、封面、设置、自定义书源与在线音色、本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-backup">${icon('book')}<div class="st">从备份恢复<small>选择之前导出的 .json，会覆盖当前所有数据</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>${noteFilterActive() ? '按「我的笔记」当前的搜索 / 按卷 / 颜色筛选导出' : '把所有卷的笔记整理成一个 TXT'}，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
@@ -4700,6 +4742,19 @@
       case 'open-search': go('search'); break;
       case 'import-books': $('#fileInput').click(); break;
       case 'export-backup': exportBackup(); break;
+      case 'clean-covers': {
+        /* 只掉图片，保留每本书选过的底纹 / 配色 / 印章，封面还会按原风格重新生成，
+           不至于一键清成全白。 */
+        const ids = Object.keys(state.covers || {}).filter((x) => state.covers[x] && state.covers[x].image);
+        if (!ids.length) { toast('没有可清理的封面图'); break; }
+        if (!confirm('清理 ' + ids.length + ' 张自定义封面图？\n\n封面的底纹、配色与印章会保留，只是不再显示照片；此操作不可撤销。')) break;
+        ids.forEach((x) => { delete state.covers[x].image; });
+        const okSave = save();
+        if (okSave) ui.storageFull = false;
+        render();
+        toast(okSave ? '已清理 ' + ids.length + ' 张封面图' : '封面图已清理，但空间仍然不够，建议导出备份后清理已导入的卷');
+        break;
+      }
       case 'import-backup': $('#backupFileInput').click(); break;
       case 'delete-local': deleteLocalBook(id); break;
       case 'edit-local': openMetaEditor(id); break;

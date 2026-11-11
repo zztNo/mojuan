@@ -76,6 +76,15 @@ const newPage = async (browser, extra, errs) => {
     await p.waitForTimeout(250);
     ok('批量删除并退出整理', (await p.locator('.note-multi-bar').count()) === 0
       && (await p.locator('[data-note-item]').count()) === 0);
+    /* 存储占用行：配额告警的入口。没有封面图时不该出现「清理封面」——
+       按钮只在存满/偏紧且真有图片可清时才给，空按一下没意义。 */
+    const stRow = await p.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('.setting-row .st'))
+        .find((x) => /本地存储/.test(x.textContent));
+      return el ? el.textContent.replace(/\s+/g, ' ') : '';
+    });
+    ok('墨斋显示本地存储占用', /已用\s*[\d.]+\s*(MB|KB)/.test(stRow), stRow);
+    ok('无封面图时不显示清理按钮', (await p.locator('[data-action="clean-covers"]').count()) === 0);
 
   }
 
