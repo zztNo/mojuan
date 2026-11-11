@@ -57,6 +57,9 @@
   let readerToken = 0;
   let sourcesReady = Promise.resolve();
   let importing = false;
+  /* 断网时 navigator.onLine 为 false；用它决定要不要为在线书发请求、
+     以及页面上的提示该说「目录没取回来」还是「现在没有网络」。 */
+  function online() { return !(typeof navigator !== 'undefined' && navigator.onLine === false); }
 
   /* 书源层：书肆 / 藏卷 / 详情 / 阅读器 统一从这里取书
    * 内置公版书、维基文库在线源、本地导入卷，都走同一套接口 */
@@ -470,7 +473,7 @@
     noteMulti: false, notePicked: new Set(),
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
     bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
-    tocLoading: false, tocFailed: false, storageFull: false
+    tocLoading: false, tocFailed: false, tocOffline: false, storageFull: false
   };
   let readerSession = null;
   let lastFocus = null;   /* { hash, key }：跨页返回时把焦点还给原来那个控件 */
@@ -1484,7 +1487,7 @@
         <h3>目录 <button class="link-more" data-action="open-catalog" data-id="${b.id}">全部 ${chapters.length} 章 ${icon('right', 'ic-sm')}</button></h3>
         ${b.online && chapters.length <= 1
           ? (ui.tocLoading ? tocLoadingHtml()
-            : (ui.tocFailed ? `<div class="toc-status">${icon('info', 'ic-sm')} 目录没取回来
+            : (ui.tocFailed ? `<div class="toc-status">${icon('info', 'ic-sm')} ${ui.tocOffline ? '现在没有网络，连上后点重试' : '目录没取回来'}
                 <button class="btn btn-ghost btn-sm" data-action="retry-toc" data-id="${b.id}">${icon('refresh', 'ic-sm')} 重试</button></div>`
               : `<div class="toc-status">${icon('info', 'ic-sm')} 篇目开卷时联网取回</div>`))
           : `<ul class="chapter-preview">${chapters.slice(0, 6).map((c, i) =>
@@ -4634,12 +4637,27 @@
   /* 在线书的目录是懒取的：一键进详情页只有「开卷取回」占位，篇目会显示成 1。
    * 打开详情时补取一次目录，取到就重绘，取不到（离线）就保持占位。 */
   const tocTried = {};
+  const tocFailAt = {};
+  /* 断网时取目录是立刻 reject 的，一失败就把 tocTried 放回 false、再 render 又触发一次，
+     会变成「永远停在正在取回 + 每秒上千次失败请求」。所以失败后要停手：
+     钉住 tocTried、记下失败时刻，8 秒内不自动重试；离开详情页再进来才重新自动试一次。 */
+  const TOC_COOLDOWN = 8000;
   async function hydrateOnlineToc(id, force) {
     const b = getBook(id);
     if (!b || !b.online || tocTried[id]) return;
     if (!force && (b.chapters || []).length > 1) return;
     const src = SRC.get(b.sourceId);
     if (!src || typeof src.getBookMeta !== 'function') return;
+    const lastFail = tocFailAt[id] || 0;
+    if (!force && lastFail && Date.now() - lastFail < TOC_COOLDOWN) { ui.tocFailed = true; ui.tocOffline = !online(); return; }
+    /* 明确断网就别发了：省电，也不用让用户对着转圈等 */
+    if (!online()) {
+      tocTried[id] = true; ui.tocLoading = false; ui.tocFailed = true; ui.tocOffline = true;
+      tocFailAt[id] = Date.now();
+      const now = parseRoute();
+      if (now.name === 'book' && now.id === id) render();
+      return;
+    }
     tocTried[id] = true;
     ui.tocLoading = true; ui.tocFailed = false;
     const cur = parseRoute();
@@ -4648,14 +4666,13 @@
       const m = await src.getBookMeta(id, { force });
       if (m && m.chapters && m.chapters.length > 1) {
         b.chapters = m.chapters;
-      } else if (force) {
-        ui.tocFailed = true;
+        delete tocFailAt[id];
+      } else {
+        ui.tocFailed = true; tocFailAt[id] = Date.now();
       }
-    } catch (e) { if (force) ui.tocFailed = true; }
+    } catch (e) { ui.tocFailed = true; tocFailAt[id] = Date.now(); }
     ui.tocLoading = false;
-    /* 取失败不把 tocTried 钉死：这次离线、下次重进详情页（可能已恢复网络）还有机会自动重取，
-       不必非得靠手动「重试」按钮。 */
-    if ((b.chapters || []).length <= 1) tocTried[id] = false;
+    ui.tocOffline = !online();
     const now = parseRoute();
     if (now.name === 'book' && now.id === id) render();
   }
@@ -4673,6 +4690,12 @@
     const r = parseRoute();
     if (r.name === 'reader') { showReader(r.id, r.ch); return; }
     hideReader();
+    /* 离开详情页就把「这次取过目录」的记账清掉：下次再进来（哪怕刚断过网）
+       还会自动试一次，但停在页面上时不会反复空转。 */
+    if (r.name !== 'book') {
+      Object.keys(tocTried).forEach((k) => { delete tocTried[k]; });
+      Object.keys(tocFailAt).forEach((k) => { delete tocFailAt[k]; });
+    }
     if (r.name !== 'shelf') closeShelfMenu();
     ui.nav = NAV.some((n) => n.key === r.name) ? r.name
       : (['book', 'search', 'category', 'rank'].includes(r.name) ? 'store' : ui.nav);

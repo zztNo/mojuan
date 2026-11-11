@@ -443,6 +443,47 @@ const newPage = async (browser, extra, errs) => {
     await p.close();
   }
 
+  /* ---------- K. 断网进在线书详情：不许空转，要给话说 ---------- */
+  {
+    const p = await newPage(browser, {}, errs);
+    /* 数一下真的发了多少网络请求：断网时最怕「失败→重渲染→再失败」的忙循环 */
+    await p.addInitScript(() => {
+      window.__fetchN = 0;
+      const raw = window.fetch;
+      window.fetch = function () { window.__fetchN += 1; return raw.apply(this, arguments); };
+    });
+    await p.goto(FILE + '#/store');
+    await p.waitForSelector('[data-id^="ws:"]', { timeout: 10000 });
+    await p.context().setOffline(true);
+    await p.evaluate(() => { location.hash = '#/book/ws:honglou'; });
+    await p.waitForTimeout(1200);
+    const st = await p.evaluate(() => ({
+      n: window.__fetchN,
+      toc: (document.querySelector('#tocPanel') || {}).textContent || '',
+      retry: !!document.querySelector('[data-action="retry-toc"]'),
+      loading: /正在取回/.test((document.querySelector('#tocPanel') || {}).textContent || '')
+    }));
+    ok('断网时不给在线书发请求', st.n === 0, 'fetch=' + st.n);
+    ok('断网时明说「没有网络」', /没有网络/.test(st.toc), st.toc.replace(/\s+/g, ' ').slice(0, 60));
+    ok('断网时给「重试」按钮', st.retry);
+    ok('断网时不再无限「正在取回」', !st.loading);
+    await p.waitForTimeout(800);
+    ok('停住之后没有偷偷重试', (await p.evaluate(() => window.__fetchN)) === 0);
+    /* 恢复网络点重试：要真的重发一次，而不是点了没反应 */
+    await p.context().setOffline(false);
+    await p.click('[data-action="retry-toc"]');
+    await p.waitForTimeout(1500);
+    const after = await p.evaluate(() => ({
+      n: window.__fetchN,
+      toc: (document.querySelector('#tocPanel') || {}).textContent || ''
+    }));
+    ok('恢复网络后点重试会重新取', after.n > 0, 'fetch=' + after.n);
+    /* 真实网络下这一刻要么已经在取、要么已经取回；不该还停在「没有网络」的旧状态 */
+    ok('重试后离开离线提示', !/没有网络/.test(after.toc), after.toc.replace(/\s+/g, ' ').slice(0, 60));
+    await p.context().setOffline(false);
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

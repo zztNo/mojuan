@@ -1,6 +1,9 @@
 # 构建产物（由 tools/build_standalone.py 重新生成，无需入库）
 mojuan-offline.html
 
+# 发版资产（APK 由 PWABuilder 出包，走 Release 附件，不进仓库）
+*.apk
+
 # 工具缓存：抓取/拆分书源的中间产物，体积大且可重建
 tools/cache/
 
