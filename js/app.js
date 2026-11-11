@@ -448,9 +448,43 @@
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
+  let lastFocus = null;   /* { hash, key }：跨页返回时把焦点还给原来那个控件 */
   let bannerTimer = null;
   let pendingScroll = 0;
-  function rerender() { pendingScroll = window.scrollY; render(); }
+  function rerender() {
+    pendingScroll = window.scrollY;
+    /* 重渲染会把页面整块换掉，原来按着的那个按钮就没了，焦点掉回 body。
+       切分类 / 换排序 / 删卷之后键盘用户得从页首重新 Tab 一遍。
+       这里按「动作 + 值」把同一个按钮找回来（找不到就不硬塞）。 */
+    const back = restorableFocus();
+    render();
+    if (back) {
+      const again = resolveFocus(back);
+      if (again) again.focus({ preventScroll: true });
+    }
+  }
+  /* 页面容器只当「兜底焦点」，不该记成「用户刚才在哪儿」——否则从详情页退回来时会去还原 #view */
+  const FOCUS_SKIP_IDS = ['view', 'reader', 'listen', 'catalogDrawer', 'readerPanel', 'searchDrawer'];
+  function restorableFocus() {
+    const a = document.activeElement;
+    if (!a || a === document.body) return null;
+    if (a.id) return FOCUS_SKIP_IDS.indexOf(a.id) >= 0 ? null : { id: a.id };
+    const act = a.dataset && a.dataset.action;
+    if (!act) return null;
+    return { action: act, val: a.dataset.val == null ? null : a.dataset.val, bookId: a.dataset.id || null };
+  }
+  function resolveFocus(key) {
+    if (!key) return null;
+    if (key.id) return document.getElementById(key.id);
+    let list = Array.from(document.querySelectorAll('[data-action="' + key.action + '"]'));
+    if (!list.length) return null;
+    if (key.bookId) list = list.filter((el) => el.dataset.id === key.bookId);
+    if (key.val != null) list = list.filter((el) => (el.dataset.val || '') === key.val);
+    /* 同动作的按钮可能有一整页（每张书卡都有「打开」），拿不准就不要抢焦点 */
+    if (list.length === 1) return list[0];
+    if (key.val != null || key.bookId) return list[0] || null;
+    return null;
+  }
 
   /* ---------- 工具 ---------- */
   function icon(n, cls) { return `<svg class="ic ${cls || ''}"><use href="#i-${n}"></use></svg>`; }
@@ -5696,8 +5730,19 @@
      这里把焦点交给内容容器，读屏也会跟着播报新页面。 */
   window.addEventListener('hashchange', () => {
     const lost = document.activeElement === document.body || document.activeElement === null;
+    /* 从详情页退回来时，焦点应该回到刚才点的那张书卡，
+       而不是笼统地扔给页面容器（键盘用户得从第一个书卡重新数）。
+       注意：必须先 render 再找节点，render 前拿到的 DOM 引用会被整块替换掉。 */
+    const backKey = (lastFocus && lastFocus.hash === location.hash) ? lastFocus.key : null;
     render();
-    if (lost && !$('#reader')) { const v = $('#view'); if (v) v.focus({ preventScroll: true }); }
+    const back = backKey ? resolveFocus(backKey) : null;
+    if (back && document.contains(back)) back.focus({ preventScroll: true });
+    else if (lost && !$('#reader')) { const v = $('#view'); if (v) v.focus({ preventScroll: true }); }
+  });
+  /* 记下「哪个路由上的哪个控件刚被聚焦过」：跨页返回时按这个还原 */
+  document.addEventListener('focusin', () => {
+    const k = restorableFocus();
+    if (k) lastFocus = { hash: location.hash, key: k };
   });
   /* 书源：内置源在脚本载入时已同步进索引（首屏即有书）；这里再聚合在线源与自定义源 */
   sourcesReady = restoreCustomSources();

@@ -328,6 +328,27 @@ const newPage = async (browser, extra, errs) => {
     await p.close();
   }
 
+  /* ---------- I. 焦点还原：跨页返回 / 同页重渲染 ---------- */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/store');
+    await p.waitForSelector('[data-action="open-book"]', { timeout: 8000 });
+    const card = p.locator('[data-action="open-book"]').first();
+    const bid = await card.getAttribute('data-id');
+    await card.focus();
+    await p.keyboard.press('Enter');
+    await p.waitForTimeout(500);
+    ok('回车打开详情', (await p.evaluate(() => location.hash)).indexOf('#/book/') === 0);
+    await p.goBack();
+    await p.waitForTimeout(600);
+    const back = await p.evaluate(() => ({
+      act: document.activeElement.dataset.action || '',
+      id: document.activeElement.dataset.id || ''
+    }));
+    ok('返回列表后焦点回到原来那张书卡', back.act === 'open-book' && back.id === bid, JSON.stringify(back));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {
