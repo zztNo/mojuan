@@ -1557,3 +1557,14 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 @media (max-width: 767px) {
   .flip-shade { top: 24px; left: 22px; right: 22px; bottom: 46px; }
 }
+
+
+/* ============================================================
+   大列表渲染跳过：书肆 / 藏卷动辄上百张书卡，视口外的不必布局绘制。
+   用浏览器原生的 content-visibility，DOM 节点仍然全在，
+   所以「纯 DOM hidden 过滤」的搜索、分组筛选、批量整理完全不受影响。
+   高度用 intrinsic size 占位，滚动条不会跳；不支持的浏览器自动忽略。
+   ============================================================ */
+.book-card, .book-row { content-visibility: auto; }
+.book-card { contain-intrinsic-height: auto 238px; }
+.book-row { contain-intrinsic-height: auto 92px; }

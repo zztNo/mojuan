@@ -377,6 +377,65 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
     await ctx.close();
   }
 
+  /* ---------- 15. 大列表：跳过视口外渲染，但 DOM / 搜索 / 整理都不变 ---------- */
+  {
+    const books = Array.from({ length: 300 }, (_, i) => ({
+      id: 'bk' + i, title: '卷' + String(i).padStart(3, '0'), author: '佚名', local: true, chapters: ['正文']
+    }));
+    const { ctx, p, errs } = await scene(browser, seeded({
+      shelf: books.map((b) => b.id), localBooks: books
+    }));
+    await p.goto(FILE + '#/shelf');
+    await p.waitForSelector('.book-card', { timeout: 10000 });
+    const cv = await p.evaluate(() => getComputedStyle(document.querySelector('.book-card')).contentVisibility);
+    ok('书卡启用视口外渲染跳过', cv === 'auto', cv);
+    ok('300 卷仍全在 DOM 中', (await p.locator('[data-shelf-card]').count()) === 300);
+    await p.fill('#shelfSearch', '卷299');
+    await p.waitForTimeout(160);
+    ok('纯 DOM 搜索过滤不受影响', (await p.locator('[data-shelf-card]:not([hidden])').count()) === 1);
+    await p.fill('#shelfSearch', '');
+    await p.waitForTimeout(120);
+    await p.click('[data-action="toggle-edit"]');
+    await p.waitForTimeout(160);
+    ok('批量整理选择框仍在', (await p.locator('.pick-box').count()) === 300);
+    ok('大列表无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
+  /* ---------- 16. 在线取章失败退避：冷却不打源，手动重试立即放行 ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('取章失败有退避阶梯', src.includes('CHAPTER_BACKOFF') && src.includes('retryAt'));
+    const { ctx, p, errs } = await scene(browser, seeded());
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(900);
+    await p.evaluate(() => {
+      window.__calls = 0;
+      const s = window.MJ.sources.get('wikisource');
+      if (s) s.getChapter = () => { window.__calls++; return Promise.reject(new Error('模拟断网')); };
+    });
+    await p.goto(FILE + '#/reader/ws:honglou/1');
+    await p.waitForSelector('.reader-error', { timeout: 10000 });
+    const c1 = await p.evaluate(() => window.__calls);
+    /* 同一会话内离开再回来（contentCache 还在），冷却期内不该再发请求 */
+    await p.evaluate(() => { location.hash = '#/store'; });
+    await p.waitForTimeout(120);
+    await p.evaluate(() => { location.hash = '#/reader/ws:honglou/1'; });
+    await p.waitForTimeout(600);
+    const c2 = await p.evaluate(() => window.__calls);
+    ok('首次失败只请求一次', c1 === 1, 'c1=' + c1);
+    ok('冷却期内不重复打书源', c2 === 1, 'c2=' + c2);
+    const retry = await p.locator('[data-action="reader-retry"]').count();
+    if (retry) {
+      await p.click('[data-action="reader-retry"]');
+      await p.waitForTimeout(600);
+      const c3 = await p.evaluate(() => window.__calls);
+      ok('点重新取回可立即重试', c3 === 2, 'c3=' + c3);
+    } else ok('点重新取回可立即重试', false, '找不到重试按钮');
+    ok('退避流程无脚本报错', errs.filter((x) => x.startsWith('PAGEERROR')).length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
   await browser.close();
   console.log('\n数据安全 / 兼容专项：' + pass + ' PASS / ' + fail + ' FAIL');
   if (fail) process.exit(1);

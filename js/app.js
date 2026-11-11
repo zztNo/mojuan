@@ -93,6 +93,8 @@
     }
     return any ? out : [];
   }
+  /* 连续取章失败时的冷却阶梯：断网时别让翻章 / 全书检索把书源打爆 */
+  const CHAPTER_BACKOFF = [0, 3000, 8000, 18000, 30000];
   /* 正文按需取：内置书首次打开要加载整本分片，在线源逐章取回 */
   async function ensureChapter(b, no) {
     if (!b || b.local) return;
@@ -100,7 +102,10 @@
     if (!src || typeof src.getChapter !== 'function') return;
     if (SRC.getChapterSync(b.id, no)) return;
     const rec = contentCache[b.id] || (contentCache[b.id] = { id: b.id, chapters: [] });
-    if (rec.chapters[no - 1] && rec.chapters[no - 1].paras) return;
+    const prev = rec.chapters[no - 1];
+    if (prev && prev.paras) return;
+    /* 冷却期内复用上次的失败标记，不再发请求；用户点「重新取回」会删掉记录，立即放行 */
+    if (prev && prev.error && Date.now() < (prev.retryAt || 0)) return;
     /* 同一章已在取回中（目录回写触发的二次 ensure 等），直接复用那次请求 */
     const inflightKey = b.id + '::' + no;
     if (chapterInFlight[inflightKey]) { await chapterInFlight[inflightKey]; return; }
@@ -119,9 +124,11 @@
            是超时 / 书源被停用 / 章节不存在，重试也知道该重试什么。 */
         const raw = (e && e.message ? String(e.message) : '')
           .replace(/[（）\r\n]/g, ' ').trim();
+        const attempts = Math.min(CHAPTER_BACKOFF.length - 1, ((prev && prev.attempts) || 0) + 1);
         rec.chapters[no - 1] = {
           title: '', paras: null,
-          error: raw ? raw.slice(0, 60) : '取回失败'
+          error: raw ? raw.slice(0, 60) : '取回失败',
+          attempts, retryAt: Date.now() + CHAPTER_BACKOFF[attempts]
         };
       }
     })();
@@ -1585,7 +1592,7 @@
             ${icon('info', 'ic-lg')}
             <p>${esc(errMsg)}</p>
             <button class="btn btn-primary btn-sm" data-action="reader-retry">${icon('refresh', 'ic-sm')} 重新取回</button>
-            <p class="re-hint">${b.online ? '内置的' + allBooks().filter((x) => !x.online).length + '卷公版书随墨卷离线保存，断网也能读。' : ''}</p>
+            <p class="re-hint">${b.online ? '内置的' + allBooks().filter((x) => !x.online).length + '卷公版书随墨卷离线保存，断网也能读。' : ''} 连续失败会自动放慢重试，点上方按钮可立即再试。</p>
           </div>`;
     const bodyInner = flip
       ? `<div class="reader-paper flip-paper" id="readerPaper">
