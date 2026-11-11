@@ -4,13 +4,12 @@
 
 ## 📦 怎么拿到 / 怎么装
 
-Release 附件里准备了三种方式，按需取：
+Release 附件里准备了两种方式，按需取（桌面 exe 本次未重打，需要的话到 [v1.1.0 Release](https://github.com/zztNo/mojuan/releases/tag/v1.1.0) 取）：
 
 | 文件 | 适合谁 | 说明 |
 |------|--------|------|
 | **mojuan-offline.html** | 想直接读、想分享的人 | 所有资源内联进一个 HTML，**双击就能读**，也方便发给朋友。 |
-| **墨卷阅读-unsigned.apk** | 安卓手机用户 | PWABuilder 出的 TWA 包，首次联网加载后离线可用。安装时若提示「未知来源」，在系统设置允许该安装器一次即可（未签名，没上架商店）。 |
-| **墨卷-1.1.0-portable.exe** | 想用桌面 exe 的进阶用户（**可选**） | Electron 便携版，没有代码签名证书，首次运行会被 Defender / SmartScreen 拦（不是病毒）。普通用户不建议，详见下方「Windows 怎么装」。 |
+| **mojuan-unsigned.apk** | 安卓手机用户 | PWABuilder 出的 TWA 包，首次联网加载后离线可用。安装时若提示「未知来源」，在系统设置允许该安装器一次即可（未签名，没上架商店）。 |
 
 ### 💡 推荐：装成原生 App（零拦截、离线可用）
 
@@ -25,7 +24,7 @@ Release 附件里准备了三种方式，按需取：
 
 - **最省事**：上面那种 PWA 安装，不用下载任何文件、不用签名、Defender 完全不碰，强烈推荐。
 - **想要商店入口（可选）**：可以用 PWABuilder 把墨卷提交到 Microsoft Store，微软在认证时**免费签名**，用户从商店装完全无拦截；代价是一次性 **$19** 开发者账号 + 过商店认证，比买代码签名证书现实得多。
-- **exe 不主推**：现有 `墨卷-1.1.0-portable.exe` 仅留给愿意手动放行（「更多信息 → 仍要运行」或加排除项）的用户。
+- **exe 不主推**：桌面便携版停在 [v1.1.0 Release](https://github.com/zztNo/mojuan/releases/tag/v1.1.0) 的 `mojuan-1.1.0-portable.exe`（本次没有再打包），仅留给愿意手动放行（「更多信息 → 仍要运行」或加排除项）的用户。
 
 > 完整图文步骤见仓库 `PWA_INSTALL_GUIDE.md`。
 
