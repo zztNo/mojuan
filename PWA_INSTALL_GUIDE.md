@@ -53,6 +53,45 @@ v1.1.0 曾用 Electron 打出 `墨卷-1.1.0-portable.exe`，但它**没有代码
    - （可选）**Windows** 卡片 → 点 **Download** → 下载 `.msix` 安装包（Win10/11 双击安装，相当于官方商店版，也不触发 Defender）。
 4. 手机装 `.apk` 时若提示「未知来源」，在系统设置里允许该安装器一次即可。
 
+#### 重新打包时这几项必须照着填（数值量自 v1.1.0 的 APK）
+
+| 项 | 填什么 | 为什么不能改 |
+|---|---|---|
+| Site URL | `https://zztNo.github.io/mojuan/` | TWA 壳只负责加载这个地址，别的地址就是另一个站 |
+| App ID / Package ID | `io.github.zztno.twa` | 改了会被 Android 当成**另一个 App**：老用户装完多出一个图标，桌面快捷方式、通知权限、已下载的数据全都不继承 |
+| Version code | 旧包是 `1`，新包填 `2`（以后每次 +1） | 新包的 versionCode 必须 ≥ 已装版本，否则安装器直接报「应用未安装」，不提示原因 |
+| Version name | `1.1.1`（旧包是 `1.0.0.0`） | 只影响系统设置里显示的版本号，随便写但要能看出来 |
+| minSdk / targetSdk | `24` / `36`（PWABuilder 默认即可） | 决定最低支持 Android 7.0，不用改 |
+| Signing key | 旧包是**未签名**，这次要么继续选 None，要么接受「老用户得先卸载」 | 换签名 = 签名不匹配，Android 不允许覆盖安装，必须先卸载旧版（卸载会清掉 App 内的数据，书库在浏览器 profile 里一般还在） |
+
+> 只更新内容、不换壳的话，其实**不需要重新打包**：APK 加载的是在线地址，`git push` 之后自动就是新版。只有要改包名 / 版本号 / 图标 / 签名时才需要重走这一遍。
+
+#### 想要「没有地址栏」的真全屏（可选，需要自己的签名）
+
+TWA 打开时会做 Digital Asset Links 校验：站点根目录得有一个 `/.well-known/assetlinks.json`，里面写 APK 签名的 SHA-256 指纹。没有这个文件时，安卓会退化成带地址栏的 Custom Tab——能正常用，但不是全屏应用。
+
+做的顺序是**先生成签名、再写文件**：
+
+1. 在 PWABuilder 里选 **Use my own signing key**（或让它新生成一个），把 keystore 和密码存好，别丢——以后每次更新都得用同一个签名。
+2. 拿到指纹（二选一）：
+   - `keytool -list -v -keystore 你的.jks -alias 别名` → 复制 **SHA256** 那一行
+   - 或对已签名的 apk 跑 `apksigner verify --print-certs 你的.apk`
+3. 在仓库新建 `.well-known/assetlinks.json`：
+
+```json
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "io.github.zztno.twa",
+    "sha256_cert_fingerprints": ["这里换成你的 SHA256 指纹，冒号保留大写"]
+  }
+}]
+```
+
+4. 仓库根目录必须有 `.nojekyll`（空文件，已随仓库提供）。GitHub Pages 默认走 Jekyll，而 Jekyll 会**忽略 `.well-known` 这类点开头的目录**，文件推上去也是 404；`.nojekyll` 让它原样发布。
+5. 推上去后验证：浏览器直接打开 `https://zztNo.github.io/mojuan/.well-known/assetlinks.json`，能看到上面那段 JSON 才算成功（能看到就说明路径、编码都没问题）。再装新 APK，第一次打开若还是带地址栏，多半是签名指纹对不上。
+
 ### 说明
 
 - PWABuilder 生成的 APK 是个 **TWA（可信 Web 活动）**：首次打开会从上面的网址加载墨卷，之后 Service Worker 把整站缓存下来，离线也能进书架、读内置离线书。
