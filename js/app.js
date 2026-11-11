@@ -6072,7 +6072,46 @@
     renderNav(ui.nav);
     if (!$('#reader')) render();
   }).catch(() => {});
+  /* Service Worker 是 skipWaiting + clients.claim：新版本一装好就立刻接管，
+     可页面里还跑着旧脚本，不刷新就一直是旧版（修好的 bug 也拿不到）。
+     给一条不打扰的提示，让用户自己挑时候更新。 */
+  let swReloading = false;
+  function showUpdateBar() {
+    if ($('#updateBar')) return;
+    const busy = listen.active && listen.playing;
+    /* 手机宽度放不下长句，窄屏换短文案，宁肯少说也别截成「更新会中断听…」 */
+    const narrow = window.innerWidth < 460;
+    const text = busy
+      ? (narrow ? '听书中 · 更新会中断' : '新版本已备好 · 更新会中断听书')
+      : (narrow ? '有新版本可更新' : '新版本已备好');
+    const el = document.createElement('div');
+    el.id = 'updateBar';
+    el.className = 'update-bar';
+    el.setAttribute('role', 'status');
+    el.innerHTML = `<span>${text}</span>
+      <button class="btn btn-sm" data-update="now">立即更新</button>
+      <button class="btn btn-ghost btn-sm" data-update="later">稍后</button>`;
+    el.addEventListener('click', (e) => {
+      const k = e.target.closest('[data-update]');
+      if (!k) return;
+      if (k.dataset.update === 'now') {
+        swReloading = true;
+        el.remove();
+        location.reload();
+      } else {
+        el.remove();
+      }
+    });
+    document.body.appendChild(el);
+  }
   if ('serviceWorker' in navigator) {
+    /* 首次安装也会触发 controllerchange（页面从「没有 SW」变成「有」），
+       那种情况不该提示「新版本」——只有原本就有 SW 才算换版。 */
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || swReloading) return;
+      showUpdateBar();
+    });
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then((reg) => {
       /* 首屏彻底空下来后再让 SW 补齐 19 本正文，避免和首屏抢带宽 */
       setTimeout(() => {

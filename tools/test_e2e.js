@@ -475,8 +475,66 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(700);
     const ch2 = await p.textContent('#listenChapter');
     ok('听卷换章后章名跟着变', ch1 !== ch2 && /葛覃/.test(ch2 || ''), (ch1 || '') + ' -> ' + (ch2 || ''));
-    ok('换章后朗读文本也换了', (await p.evaluate(() => window.__tts.__spoke.slice(-1)[0])) !== undefined);
+    const spoke = await p.evaluate(() => window.__tts.__spoke);
+    ok('换章后念的是新章正文', /葛覃/.test(spoke[spoke.length - 1] || ''), spoke.slice(-1)[0]);
     await p.close();
+  }
+
+  /* ---------- H4. 发版后老页面提示更新（需要 http 环境才有 Service Worker） ---------- */
+  {
+    const http = require('http');
+    const fsx = require('fs');
+    const ROOT_ = path.resolve(__dirname, '..');
+    const MIME = {
+      '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8', '.webmanifest': 'application/manifest+json',
+      '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.json': 'application/json'
+    };
+    let swVer = 0;
+    const server = http.createServer((req, res) => {
+      const u = decodeURIComponent(req.url.split('?')[0]);
+      if (u === '/sw.js') {
+        res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store' });
+        res.end(`/* sw v${swVer} */self.addEventListener('install',()=>self.skipWaiting());`
+          + `self.addEventListener('activate',(e)=>e.waitUntil(self.clients.claim()));`);
+        return;
+      }
+      const f = path.join(ROOT_, u === '/' ? 'index.html' : u.replace(/^\//, ''));
+      if (!f.startsWith(ROOT_) || !fsx.existsSync(f) || fsx.statSync(f).isDirectory()) {
+        res.writeHead(404); res.end(''); return;
+      }
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream' });
+      fsx.createReadStream(f).pipe(res);
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    const p = await newPage(browser, {}, errs);
+    await p.goto(origin + '/index.html#/shelf');
+    await p.evaluate(() => navigator.serviceWorker.ready);
+    await p.waitForTimeout(600);
+    ok('首次装好 SW 不弹「新版本」', (await p.locator('#updateBar').count()) === 0);
+    /* 再进一次页面：这回进来时已经有 controller，算「老页面」 */
+    await p.reload();
+    await p.waitForTimeout(600);
+    swVer = 1;
+    await p.evaluate(async () => { const r = await navigator.serviceWorker.getRegistration(); await r.update(); });
+    await p.waitForTimeout(2500);
+    ok('发版后老页面会提示有新版本', (await p.locator('#updateBar').count()) === 1);
+    await p.click('#updateBar [data-update="later"]');
+    await p.waitForTimeout(200);
+    ok('点「稍后」提示条消失', (await p.locator('#updateBar').count()) === 0);
+    /* 再来一版：点「立即更新」应该真的刷新页面 */
+    swVer = 2;
+    await p.evaluate(async () => { const r = await navigator.serviceWorker.getRegistration(); await r.update(); });
+    await p.waitForTimeout(2500);
+    ok('第二版也会提示', (await p.locator('#updateBar').count()) === 1);
+    await p.evaluate(() => { window.__beforeReload = 1; });
+    await p.click('#updateBar [data-update="now"]');
+    await p.waitForTimeout(1200);
+    ok('点「立即更新」会刷新页面', (await p.evaluate(() => window.__beforeReload)) === undefined);
+    await p.close();
+    server.closeAllConnections && server.closeAllConnections();
+    await new Promise((r) => server.close(r));
   }
 
   /* ---------- I. 焦点还原：跨页返回 / 同页重渲染 ---------- */

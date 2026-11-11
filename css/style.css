@@ -228,6 +228,20 @@ img, svg { display: block; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* 新版本提示：不抢焦点、不挡正文；点「稍后」即刻消失 */
+.update-bar {
+  position: fixed; left: 50%; bottom: calc(88px + env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 190;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px);
+  padding: 9px 10px 9px 16px; border-radius: 999px;
+  background: var(--paper-2); color: var(--ink);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+  font-size: 13px; animation: updateBarIn .3s ease;
+}
+.update-bar > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-bar .btn { flex: none; }
+@keyframes updateBarIn { from { opacity: 0; transform: translate(-50%, 12px); } }
+
 /* ---------- 书封 ---------- */
 .cover {
   position: relative; width: 100%; aspect-ratio: 200/290; border-radius: 6px; overflow: hidden;
