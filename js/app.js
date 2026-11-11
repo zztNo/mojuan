@@ -168,6 +168,36 @@
     try { await task; } finally { delete chapterInFlight[inflightKey]; }
   }
 
+  /* 读到一章就顺手把下一章取回来：真翻到下一章时是「翻过去就有字」，
+     而不是先看一屏「正在取回」。只在空闲时发一次请求，离线、后台标签、
+     正在全书检索、已经离开这一卷时都不做。 */
+  let prefetchCancel = null;
+  function prefetchNext(b, ch) {
+    if (prefetchCancel) { prefetchCancel(); prefetchCancel = null; }
+    if (!b || b.local || !b.online) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (document.hidden) return;
+    const sd = $('#searchDrawer');
+    if (sd && !sd.hidden) return;                       /* 全书检索正在跑，别再抢带宽 */
+    const next = Number(ch) + 1;
+    if (!(next > 1) || next > chapterList(b).length) return;
+    if (SRC.getChapterSync(b.id, next)) return;          /* 内置书本来就是同步的 */
+    const run = () => {
+      prefetchCancel = null;
+      const bb = getBook(b.id);
+      if (!bb || state.lastRead !== bb.id) return;      /* 已经换卷 / 出阅读器 */
+      if (document.hidden) return;
+      ensureChapter(bb, next).catch(() => {});
+    };
+    if (window.requestIdleCallback) {
+      const id = requestIdleCallback(run, { timeout: 3000 });
+      prefetchCancel = () => cancelIdleCallback(id);
+    } else {
+      const id = setTimeout(run, 700);
+      prefetchCancel = () => clearTimeout(id);
+    }
+  }
+
   /* 正文放 IndexedDB，localStorage 只放轻量元数据 */
   function openDB() {
     return new Promise((res, rej) => {
@@ -3895,6 +3925,7 @@
     if (canReuse) {
       document.body.style.overflow = 'hidden';
       paginateAndRender(b, ch, token, dir);
+      setTimeout(() => { if (token === readerToken) prefetchNext(b, ch); }, 0);
       return;
     }
     document.body.style.overflow = 'hidden';
@@ -3909,6 +3940,8 @@
     applyReaderStyle();
     const body = $('#readerBody');
     requestAnimationFrame(() => paginateAndRender(b, ch, token));
+    /* 渲染落定后再预取下一章，别和首屏分页抢主线程 / 带宽 */
+    setTimeout(() => { if (token === readerToken) prefetchNext(b, ch); }, 0);
     if (flipMode) {
       bindFlipDrag(body);
     } else {
