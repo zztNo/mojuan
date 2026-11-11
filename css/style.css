@@ -1640,3 +1640,13 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
    不含 padding（11×2）与下边框（1），所以写 21px 才能让未渲染条目总高＝渲染后的 44px，
    滚动条长度与「定位到当前章」的偏移才不会偏。 */
 .catalog-list li { content-visibility: auto; contain-intrinsic-height: 21px; }
+
+/* 上一轮放大的触点里漏了两个：横幅下的轮播圆点（可点范围只有 15×25）和
+   封面角上的「加入书架」（26×26，正好贴着书卡的点击区，手指容易落偏）。
+   圆点本身仍是 7px 的小点，只是把透明内边距撑开 —— 看得出间距变松，但更好按。 */
+@media (max-width: 767px), (pointer: coarse) {
+  .banner-dots i, .banner-dot { padding: 14px 6px; }
+  .banner-dots { right: 158px; bottom: 12px; }
+  .quick-add { width: 32px; height: 32px; right: 5px; bottom: 5px; }
+  .quick-add .ic { width: 15px; height: 15px; }
+}

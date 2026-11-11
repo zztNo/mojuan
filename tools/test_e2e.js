@@ -349,6 +349,35 @@ const newPage = async (browser, extra, errs) => {
     await p.close();
   }
 
+  /* ---------- J. 滚动进度：节流窗口内关页也不丢 ---------- */
+  {
+    const p = await newPage(browser, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerBody', { timeout: 8000 });
+    await p.evaluate(() => document.querySelector('[data-action="reader-settings"]').click());
+    await p.waitForTimeout(300);
+    await p.evaluate(() => {
+      const el = document.querySelector('[data-action="set-pagemode"][data-val="scroll"]');
+      if (el) el.click();
+    });
+    await p.waitForTimeout(600);
+    const pct = await p.evaluate(async () => {
+      const bd = document.getElementById('readerBody');
+      if (!bd) return null;
+      const max = bd.scrollHeight - bd.clientHeight;
+      if (!(max > 0)) return null;              /* 这一章短到不用滚，跳过 */
+      bd.scrollTop = max * 0.9;
+      bd.dispatchEvent(new Event('scroll'));
+      /* 260ms 节流还没到点就关页 —— 正是原来会丢进度的那个窗口 */
+      await new Promise((r) => setTimeout(r, 60));
+      window.dispatchEvent(new Event('pagehide'));
+      const st = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      return st.progress && st.progress.shijing ? st.progress.shijing.pct : null;
+    });
+    ok('节流窗口内关页，最后一次滚动位置仍落盘', pct === null || pct > 0.8, String(pct));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

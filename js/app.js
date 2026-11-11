@@ -242,10 +242,12 @@
     if (!files.length) { toast('请选择 TXT / EPUB 文件（单卷不超过 30MB）'); return; }
     importing = true;
     let lastId = null, ok = 0, weakSave = 0;
-    for (const f of files) {
+    for (let fi = 0; fi < files.length; fi++) {
+      const f = files[fi];
       const short = f.name.replace(/\.[^.]+$/, '').slice(0, 12);
       try {
-        toast('正在解析《' + short + '》…');
+        /* 一次拖进好几卷时，只说「正在解析《x》」看不出还剩几卷，加个序号 */
+        toast('正在解析《' + short + '》…' + (files.length > 1 ? '（' + (fi + 1) + ' / ' + files.length + '）' : ''));
         const r = await IMP.parseFile(f);
         const chapters = r.chapters.filter((c) => c.paras && c.paras.length);
         if (!chapters.length) throw new Error('文件里没有可读内容');
@@ -3858,6 +3860,24 @@
     if (reflowTimer) clearTimeout(reflowTimer);
     reflowTimer = setTimeout(() => { reflowTimer = null; reflowFlip(); }, 110);
   }
+  /* 把「最新滚动读数」写回 state.progress（只改内存，不落盘）。
+     滚动事件里只记 scrollTop，scrollHeight/clientHeight 到真正要算时才读，
+     免得每一帧滚动都去摸三处 layout。返回是否真的写入了。 */
+  function commitScrollProbe() {
+    const sp = ui.scrollProbe;
+    if (!sp) return false;
+    const el = sp.body;
+    /* 章节已换掉 / 阅读器已卸载时，旧节点算出来的比例会把新章进度写坏 */
+    if (!el || !document.contains(el) || readerRoot.dataset.currentBook !== sp.id) return false;
+    const max = el.scrollHeight - el.clientHeight;
+    if (!(max > 0)) return false;
+    const pct = Math.min(1, Math.max(0, (sp.top || 0) / max));
+    const prev = state.progress[sp.id];
+    if (prev && prev.ch === sp.ch && Math.abs((prev.pct || 0) - pct) < 0.0005) return false;
+    state.progress[sp.id] = { ch: sp.ch, pct, updated: Date.now() };
+    state.lastRead = sp.id;
+    return true;
+  }
   /* 改完字号 / 行距后的统一收尾：翻页模式重排；滚动模式保住原来的阅读位置 */
   function restyleReader() {
     const body = $('#readerBody');
@@ -3911,6 +3931,7 @@
     if (!readerSession) return;
     if (document.hidden) {
       accrueReadTime(Date.now());
+      commitScrollProbe();
       flushSave();
       stopReadClock();
     } else if ($('#reader')) {
@@ -3920,6 +3941,7 @@
   window.addEventListener('pagehide', () => {
     if (readerSession) { accrueReadTime(Date.now()); stopReadClock(); }
     /* 关页/刷新前把最后一次翻页、滚动进度立即落盘，否则节流中的存档会丢 */
+    commitScrollProbe();
     flushSave();
     if (listen.active) listenStopAll();
   });
@@ -4016,6 +4038,10 @@
       try { history.replaceState(null, '', '#/reader/' + id + '/' + ch); } catch (e) { /* file:// 忽略 */ }
     }
     if (!readerSession || readerSession.book !== id) { settleSession(); startReadClock(id); }
+    /* 换章 / 换卷前把上一章那次的滚动读数结算掉，再清空：
+       否则留在 ui 里的旧读数会在关页时把新章的进度写成旧位置 */
+    commitScrollProbe();
+    ui.scrollProbe = null;
     const dir = ui.flipDir || '';
     ui.flipDir = '';
     if (canReuse) {
@@ -4042,17 +4068,22 @@
       bindFlipDrag(body);
     } else {
       let tick;
+      /* 滚动位置除了节流落盘，还留一份「最新读数」在内存里：
+         260ms 的节流窗口内关页 / 切后台，flushSave() 落下去的是上一次的位置，
+         用户滚到 90% 直接关掉标签，下次打开仍在 60%。关页前用它补一次。 */
+      ui.scrollProbe = null;
       body.addEventListener('scroll', () => {
+        /* 复用同一个对象：滚动一秒钟能触发几十次，每帧新建小对象纯属给 GC 添活 */
+        const sp = ui.scrollProbe;
+        if (!sp || sp.body !== body) ui.scrollProbe = { id, ch, body, top: body.scrollTop };
+        else sp.top = body.scrollTop;
         clearTimeout(tick);
         tick = setTimeout(() => {
-          const max = body.scrollHeight - body.clientHeight;
-          const pct = max > 0 ? Math.min(1, body.scrollTop / max) : 0;
-          state.progress[id] = { ch, pct, updated: Date.now() };
-          state.lastRead = id;
+          commitScrollProbe();
           scheduleSave();
           updateReaderSeek();
         }, 260);
-      });
+      }, { passive: true });
     }
     readerRoot.dataset.currentBook = id;
     readerRoot.dataset.currentCh = ch;
