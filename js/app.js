@@ -444,7 +444,7 @@
     noteSearch: '', noteBook: '', noteColor: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
     noteMulti: false, notePicked: new Set(),
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
-    bmNote: -1,
+    bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
     tocLoading: false, tocFailed: false
   };
   let readerSession = null;
@@ -1504,6 +1504,7 @@
         <div class="sh-body">${groups.map(([g, rows]) => `<div class="sh-group"><h4>${esc(g)}</h4>${rows.map(([k, d]) =>
           `<div class="sh-row"><kbd>${esc(k)}</kbd><span>${esc(d)}</span></div>`).join('')}</div>`).join('')}</div>
       </div>`;
+    syncModalInert();
   }
   function closeShortcutHelp() {
     const r = $('#shortcutHelp');
@@ -1731,7 +1732,8 @@
         <button class="rb-mbtn" data-action="reader-settings" title="字号与纸张">${icon('settings')}<span>设置</span></button>
         <button class="rb-mbtn" data-action="reader-search" title="在本书中搜索">${icon('search')}<span>搜索</span></button>
       </div>`;
-    return `<div class="reader mode-${flip ? 'flip' : 'scroll'}" id="reader" data-paper="${state.settings.paper}">
+    /* tabindex="-1"：抽屉关掉后焦点要能回到阅读器本身，否则会掉到 body（读屏会从头念） */
+    return `<div class="reader mode-${flip ? 'flip' : 'scroll'}" id="reader" tabindex="-1" data-paper="${state.settings.paper}">
       <div class="reader-top" id="readerTop">
         <button class="icon-btn" data-action="reader-back" title="返回">${icon('back')}</button>
         <div class="rt-title">${esc(b.title)}</div>
@@ -3975,6 +3977,72 @@
       }
     });
   }
+  /* 表单类弹窗（改卷名 / 书源 / 封面 / 书架菜单 / 批量操作 / 朗读设置 / 快捷键说明）
+     都是直接 append 到 body 的覆盖层：底下页面照样在无障碍树和 Tab 序列里，
+     键盘 Tab 几下就跑到后面的书卡上了，读屏也会把整页再念一遍。
+     这里按「有没有弹窗」统一给主干设 inert，弹窗一关就还回去。
+     弹窗是 append / remove 的，用 body 的 childList 观察最省事，不必每处开关都改。 */
+  const MODAL_SELS = ['#shortcutHelp', '#metaModal', '#sourceModal', '#coverModal', '#shelfMenu', '#shelfActions', '#voiceModal'];
+  let modalWasOpen = false;
+  function findOpenModal() {
+    for (let i = 0; i < MODAL_SELS.length; i++) {
+      const el = $(MODAL_SELS[i]);
+      if (el && !el.hidden && el.childElementCount) return el;
+    }
+    return null;
+  }
+  function syncModalInert() {
+    const z = findOpenModal();
+    const on = !!z;
+    /* #view 等主干：阅读器开着时本来就被 setBgInert 设过，关弹窗不能替它撤掉 */
+    ['#view', '.topbar', '#bottomNav', '.sidebar'].forEach((sel) => {
+      const el = $(sel); if (!el) return;
+      if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+      else if (!readerRoot.dataset.currentBook) { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+    });
+    /* 阅读器本体：弹窗盖在它上面时也得让开 */
+    const rd = $('#reader');
+    if (rd) {
+      if (on) { rd.setAttribute('inert', ''); rd.setAttribute('aria-hidden', 'true'); }
+      else { rd.removeAttribute('inert'); rd.removeAttribute('aria-hidden'); }
+    }
+    if (on && !modalWasOpen) {
+      const a = document.activeElement;
+      ui.modalFrom = (a && a !== document.body && !z.contains(a)) ? a : null;
+      /* 弹窗自己会 focus 输入框的（改卷名等），这里只在焦点还落在被 inert 的区域时才兜底 */
+      if (!z.contains(document.activeElement)) {
+        const first = z.querySelector('input:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]');
+        if (first) first.focus({ preventScroll: true });
+      }
+    } else if (!on && modalWasOpen) {
+      /* 打开时焦点可能本来就在 body 上（刚换过路由），退到阅读器或页面容器，别留在 body */
+      const back = (ui.modalFrom && document.contains(ui.modalFrom)) ? ui.modalFrom : ($('#reader') || $('#view'));
+      if (back) back.focus({ preventScroll: true });
+      ui.modalFrom = null;
+    }
+    modalWasOpen = on;
+  }
+  function watchModals() {
+    if (typeof MutationObserver === 'undefined') return;
+    new MutationObserver(() => syncModalInert()).observe(document.body, { childList: true });
+  }
+  const READER_BG_SEL = ['#readerTop', '#readerBody', '#readerBottom', '#searchNav'];
+  function syncReaderInert(force) {
+    let on;
+    if (typeof force === 'boolean') on = force;
+    else {
+      on = false;
+      ['#readerPanel', '#catalogDrawer', '#searchDrawer'].forEach((sel) => {
+        const el = $(sel);
+        if (el && !el.hidden) on = true;
+      });
+    }
+    READER_BG_SEL.forEach((sel) => {
+      const el = $(sel); if (!el) return;
+      if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+      else { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+    });
+  }
   function hideReader() {
     readerToken += 1;
     /* 退出阅读器时朗读不中断，收成迷你播放条继续播；只有用户显式点「停止」才停 */
@@ -3993,6 +4061,9 @@
     hideHlEdit();
     const mask = $('#readerMask'), panel = $('#readerPanel'), drawer = $('#catalogDrawer');
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
+    /* 记下触发它的按钮：关闭后焦点要还回原处，而不是丢到 body */
+    const from = document.activeElement;
+    if (from && from !== document.body && !from.closest('#catalogDrawer') && !from.closest('#readerPanel')) ui.panelFrom = from;
     mask.hidden = false; drawer.hidden = true;
     if (kind === 'settings') {
       const fsList = [16, 18, 19, 21, 24];
@@ -4086,6 +4157,8 @@
         ${tabs}${content}`;
     }
     a11ySweep(panel); a11ySweep(drawer);
+    /* 正文与工具栏先 inert 掉，Tab 就不会从抽屉里跑到背后的翻页按钮上 */
+    syncReaderInert();
     /* 读到第 180 章时点开目录，不能让人从第 1 章一路往下滚 */
     if (kind === 'catalog' && !drawer.hidden) {
       const list = drawer.querySelector('#catalogList');
@@ -4122,13 +4195,21 @@
       if (mask) mask.hidden = true;
       if (panel) { panel.hidden = true; panel.innerHTML = ''; }
       if (drawer) { drawer.hidden = true; drawer.innerHTML = ''; }
+      syncReaderInert(false);
       syncSearchNav();
     };
     /* 面板淡出、遮罩渐隐，动画走完再清内容；焦点先还回去，别等 */
     if (mask && !mask.hidden) mjExitDo(mask, 'mj-fade-out');
     if (panel && !panel.hidden) mjExitDo(panel, 'mj-out');
     if (drawer && !drawer.hidden) mjExitDo(drawer, 'mj-out-left');
-    if (hadFocus) { const rd = $('#reader'); if (rd) rd.focus({ preventScroll: true }); }
+    if (hadFocus) {
+      /* 先解除正文的 inert，否则底栏按钮还带着 inert，focus() 会被静默忽略 */
+      syncReaderInert(false);
+      /* 优先回到当初点开它的那个按钮；换章后旧节点已不在 DOM 里，就退回阅读器本身 */
+      const back = (ui.panelFrom && document.contains(ui.panelFrom)) ? ui.panelFrom : $('#reader');
+      if (back) back.focus({ preventScroll: true });
+      ui.panelFrom = null;
+    }
     if ((mask && !mask.hidden) || (panel && !panel.hidden) || (drawer && !drawer.hidden)) {
       panelCloseTimer = setTimeout(() => {
         panelCloseTimer = 0;
@@ -4164,6 +4245,8 @@
     mjExitCancel($('#searchDrawer'));
     const mask = $('#readerMask'), d = $('#searchDrawer');
     if (!mask || !d) return;
+    const from = document.activeElement;
+    if (from && from !== document.body) ui.searchFrom = from;
     mask.hidden = false; d.hidden = false;
     d.setAttribute('role', 'dialog'); d.setAttribute('aria-modal', 'true');
     d.setAttribute('aria-label', '在《' + b.title + '》中检索');
@@ -4178,16 +4261,29 @@
       ${needNet ? `<div class="search-hint" id="searchHint">已检索已读过的 ${cached} / ${total} 章 · <button class="linklike" data-action="search-all">联网检索全书</button></div>` : ''}
       <div class="search-results" id="searchResults"><div class="search-empty">输入关键词，在本书内查找</div></div>`;
     const inp = d.querySelector('#searchBox');
+    /* 输入框先备好再解除正文 inert，否则焦点会被 inert 里的旧节点抢走 */
     if (inp) { inp.focus(); inp.addEventListener('input', () => scheduleBookSearch(b, inp.value.trim())); }
+    syncReaderInert();
   }
   function closeReaderSearch() {
     searchAllToken += 1; /* 抽屉关了就别让后台继续拉章节 */
     clearTimeout(readerSearchTimer); readerSearchTimer = 0;
     const d = $('#searchDrawer');
-    if (d && !d.hidden) mjExitDo(d, 'mj-out-right', () => { d.hidden = true; d.innerHTML = ''; });
+    const cat = $('#catalogDrawer'), pnl = $('#readerPanel');
+    const othersOpen = (cat && !cat.hidden) || (pnl && !pnl.hidden);
+    if (d && !d.hidden) mjExitDo(d, 'mj-out-right', () => { d.hidden = true; d.innerHTML = ''; syncReaderInert(); });
+    /* 焦点回到「搜索」按钮，键盘不会卡在被清空的抽屉里；背后还有面板开着就交给它 */
+    if (!othersOpen) {
+      /* 必须先把正文的 inert 解除：目标按钮就在底栏里，inert 状态下 focus() 会被静默吞掉，
+         焦点最终掉到 body，读屏会从页面开头重念 */
+      syncReaderInert(false);
+      const back = (ui.searchFrom && document.contains(ui.searchFrom)) ? ui.searchFrom : $('#reader');
+      if (back) back.focus({ preventScroll: true });
+    } else if (!d || d.hidden) syncReaderInert();
+    ui.searchFrom = null;
     const mask = $('#readerMask');
     /* 没有其它面板开着时才撤掉遮罩，免得关了搜索却把背后的面板露出来 */
-    if (mask && $('#catalogDrawer').hidden && $('#readerPanel').hidden) {
+    if (mask && !othersOpen) {
       mjExitDo(mask, 'mj-fade-out', () => { mask.hidden = true; });
     }
   }
@@ -5308,10 +5404,11 @@
   document.addEventListener('keydown', (e) => {
     /* Alt+←、Ctrl+P 等系统/浏览器组合键一律不抢 */
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    /* 模态面板打开时把 Tab 关在里面，别让焦点跑回底下的正文 */
+    /* 模态面板打开时把 Tab 关在里面，别让焦点跑回底下的正文。
+       表单类弹窗（快捷键说明等）盖在最上层，优先圈在弹窗里。 */
     if (e.key === 'Tab') {
       const drawer = $('#catalogDrawer'), panel = $('#readerPanel'), sd = $('#searchDrawer');
-      const dlg = [drawer, panel, sd].find((el) => el && !el.hidden);
+      const dlg = findOpenModal() || [drawer, panel, sd].find((el) => el && !el.hidden);
       if (dlg) {
         const f = Array.from(dlg.querySelectorAll(
           'button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -5527,6 +5624,8 @@
   });
   /* 书源：内置源在脚本载入时已同步进索引（首屏即有书）；这里再聚合在线源与自定义源 */
   sourcesReady = restoreCustomSources();
+  /* 弹窗是 append/remove 的，盯着 body 的子节点变化来同步 inert 与焦点归还 */
+  watchModals();
   render();
   sourcesReady.then(() => {
     renderNav(ui.nav);

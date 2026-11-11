@@ -118,6 +118,27 @@ const newPage = async (browser, extra, errs) => {
     ok('Esc 收起目录抽屉而不是退出阅读器', (await p.locator('#catalogDrawer').isHidden())
       && (await p.locator('#reader').count()) === 1);
 
+    /* 焦点与遮罩：抽屉开着时正文必须 inert（Tab 不能穿到背后的翻页按钮），
+       关掉后焦点要回到当初点开抽屉的那个按钮，而不是掉到 body */
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForSelector('#catalogList li');
+    ok('抽屉打开时正文被 inert', await p.evaluate(() => ['readerBody', 'readerTop', 'readerBottom']
+      .every((id) => document.getElementById(id).hasAttribute('inert'))));
+    ok('抽屉内的 Tab 不会穿到背后', await (async () => {
+      for (let i = 0; i < 24; i++) {
+        await p.keyboard.press('Tab');
+        const inside = await p.evaluate(() => !!document.activeElement.closest
+          && !!document.activeElement.closest('#catalogDrawer'));
+        if (!inside) return false;
+      }
+      return true;
+    })());
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(300);
+    ok('关闭抽屉后焦点回到触发按钮', await p.evaluate(() => document.activeElement
+      && document.activeElement.dataset.action === 'reader-catalog'));
+    ok('关闭抽屉后正文解除 inert', await p.evaluate(() => !document.getElementById('readerBody').hasAttribute('inert')));
+
     await p.click('[data-action="reader-search"]');
     await p.waitForSelector('#searchBox');
     await p.fill('#searchBox', '之');
