@@ -319,6 +319,64 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
       a.errs.concat(b.errs).join(' | '));
   }
 
+  /* ---------- 13. 批量测量：长章分页不炸、测量容器只建必要次数 ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('分页改为分块批量写读', src.includes('const BATCH = 64') && src.includes('heights.push('));
+    const { ctx, p, errs } = await scene(browser, seeded({
+      settings: { pageMode: 'flip', flipAnim: 'none', fs: 24, lh: 2.8 }
+    }), async (pp) => {
+      await pp.addInitScript(() => {
+        window.__mc = 0;
+        const ap = Node.prototype.appendChild;
+        Node.prototype.appendChild = function (el) {
+          if (el && el.classList && el.classList.contains('flip-measure')) window.__mc++;
+          return ap.call(this, el);
+        };
+      });
+    });
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    await p.evaluate(() => {
+      const srcObj = window.MJ.sources, orig = srcObj.getChapterSync;
+      const long = Array.from({ length: 800 }, (_, i) =>
+        '第' + (i + 1) + '段：关关雎鸠，在河之洲。窈窕淑女，君子好逑。参差荇菜，左右流之。');
+      srcObj.getChapterSync = (id, no) => (id === 'shijing' && no === 1) ? long : orig(id, no);
+    });
+    await p.keyboard.press('s');
+    await p.waitForSelector('[data-action="set-font"][data-val="21"]', { timeout: 8000 });
+    await p.click('[data-action="set-font"][data-val="21"]');
+    await p.waitForTimeout(650);
+    const foot = (await p.textContent('#flipFoot')).trim();
+    /* 页数随视口变化（430x900 是 266 页、400x760 是 401 页），只断言规模合理 */
+    const totalN = parseInt((foot.match(/\/ (\d+)/) || [])[1] || '0', 10);
+    ok('800 段长章正常分页', totalN > 100, foot);
+    ok('长章分页只建 2 次测量容器', (await p.evaluate(() => window.__mc)) === 2);
+    ok('长章分页无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
+  /* ---------- 14. 在线取章失败：带上原因、可重试 ---------- */
+  {
+    const src = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+    ok('取章失败写入错误原因', src.includes('error: raw ? raw.slice(0, 60)') && src.includes('paras: null'));
+    ok('正文提示会显示错误原因', src.includes("'（这一章暂未取到正文' + why"));
+    const { ctx, p, errs } = await scene(browser, seeded());
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(900);
+    await p.evaluate(() => {
+      const s = window.MJ.sources.get('wikisource');
+      if (s) s.getChapter = () => Promise.reject(new Error('模拟网络超时 12000ms'));
+    });
+    await p.goto(FILE + '#/reader/ws:honglou/1');
+    await p.waitForTimeout(1600);
+    const txt = await p.textContent('.reader-error').catch(() => '');
+    ok('失败时显示错误块与重试按钮', (txt || '').includes('重新取回'), (txt || '').slice(0, 120));
+    ok('错误块带上具体原因', (txt || '').includes('模拟网络超时'), (txt || '').slice(0, 160));
+    ok('在线失败流程无脚本报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
   await browser.close();
   console.log('\n数据安全 / 兼容专项：' + pass + ' PASS / ' + fail + ' FAIL');
   if (fail) process.exit(1);

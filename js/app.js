@@ -75,7 +75,8 @@
     const rec = contentCache[b.id];
     const c = rec && rec.chapters && rec.chapters[idx];
     if (c && c.paras && c.paras.length) return c.paras;
-    return ['（这一章暂未取到正文，请稍后重试）'];
+    const why = c && c.error ? '（' + c.error + '）' : '';
+    return ['（这一章暂未取到正文' + why + '，点下方「重新取回」再试一次）'];
   }
   /* 搜索用：把「现在拿得到」的章节正文摊平成一个数组，取不到的留 null。
      内置卷走同步源（单文件离线版也走这条），在线 / 本地卷走 contentCache。 */
@@ -113,7 +114,16 @@
           const fresh = await src.getBookMeta && await src.getBookMeta(b.id);
           if (fresh && fresh.chapters && fresh.chapters.length > 1) meta.chapters = fresh.chapters;
         }
-      } catch (e) { /* 断网时静默，渲染处会给提示 */ }
+      } catch (e) {
+        /* 别只留一句通用提示：把失败原因写进缓存，渲染处能告诉用户
+           是超时 / 书源被停用 / 章节不存在，重试也知道该重试什么。 */
+        const raw = (e && e.message ? String(e.message) : '')
+          .replace(/[（）\r\n]/g, ' ').trim();
+        rec.chapters[no - 1] = {
+          title: '', paras: null,
+          error: raw ? raw.slice(0, 60) : '取回失败'
+        };
+      }
     })();
     chapterInFlight[inflightKey] = task;
     try { await task; } finally { delete chapterInFlight[inflightKey]; }
@@ -1690,38 +1700,57 @@
     m.style.setProperty('--lh', state.settings.lh);
     m.style.setProperty('--ff', FONT_STACKS[state.settings.font] || FONT_STACKS.song);
     document.body.appendChild(m);
-    const nProbe = document.createElement('div'); nProbe.className = 'reader-chapter-no';
-    const hProbe = document.createElement('h1');
-    const pProbe = document.createElement('p');
-    m.appendChild(nProbe); m.appendChild(hProbe); m.appendChild(pProbe);
-    /* 同一次分页里每种类型的 marginBottom 固定不变，预先算好缓存，
-       避免在几百段正文里反复 getComputedStyle 触发强制样式重算 */
-    const mMargin = {};
-    /* 每种类型用同一个探针量高度，class 必须和真正渲染时一致，否则行高对不上 */
     const clsOf = (type) => (type === 'end' ? 'end-note' : type === 'no' ? 'reader-chapter-no' : type === 'notes' ? 'ch-notes-entry' : '');
-    function marginOf(type) {
-      if (!(type in mMargin)) {
-        const el = type === 'h1' ? hProbe : type === 'no' ? nProbe : pProbe;
-        el.className = clsOf(type);
-        mMargin[type] = parseFloat(getComputedStyle(el).marginBottom) || 0;
+    const nodeOf = (type) => document.createElement(type === 'h1' ? 'h1' : type === 'no' ? 'div' : 'p');
+    const setIndent = (el, type, indent) => {
+      if (type === 'p' || type === 'end' || type === 'notes') el.style.textIndent = indent ? '2em' : '0';
+    };
+
+    /* 阶段 0：五种类型的 marginBottom 固定不变，先「写一批、读一批」算好，
+       后面几百段都不用再碰 getComputedStyle。标签与 class 必须和真正渲染时一致。 */
+    const types = ['no', 'h1', 'p', 'end', 'notes'];
+    const mMargin = {}, probes = {};
+    types.forEach((type) => {
+      const el = nodeOf(type); el.className = clsOf(type);
+      m.appendChild(el); probes[type] = el;
+    });
+    types.forEach((type) => { mMargin[type] = parseFloat(getComputedStyle(probes[type]).marginBottom) || 0; });
+
+    /* 阶段 1+2：分批「整批写 → 整批读」，每批只触发一次布局。
+       原来每段都是「写 textContent → 读 offsetHeight」，一章几百次强制同步布局；
+       分 64 段一批，既把次数降到 N/64，又不像一次建 N 个节点那样吃内存。 */
+    const heights = [];
+    const BATCH = 64;
+    for (let start = 0; start < items.length; start += BATCH) {
+      const end = Math.min(start + BATCH, items.length);
+      const batch = [];
+      for (let k = start; k < end; k++) {
+        const it = items[k];
+        const el = nodeOf(it.type);
+        el.className = clsOf(it.type);
+        setIndent(el, it.type, it.type === 'p');
+        el.textContent = it.text;
+        m.appendChild(el);
+        batch.push(el);
       }
-      return mMargin[type];
+      batch.forEach((el, j) => heights.push(el.offsetHeight + mMargin[items[start + j].type]));
+      batch.forEach((el) => el.remove());
     }
+
+    /* 只有「单段比一页还长」需要二分切块时才逐次测量，绝大多数章节用不到 */
     function measure(type, text, indent) {
-      const el = type === 'h1' ? hProbe : type === 'no' ? nProbe : pProbe;
+      const el = probes[type];
       el.textContent = text;
-      if (type === 'p' || type === 'end' || type === 'notes') {
-        el.style.textIndent = indent ? '2em' : '0';
-        el.className = clsOf(type);
-      }
-      return el.offsetHeight + marginOf(type);
+      setIndent(el, type, indent);
+      return el.offsetHeight + mMargin[type];
     }
     const pages = [];
     let cur = [], used = 0;
     const flush = () => { if (cur.length) { pages.push(cur); cur = []; used = 0; } };
-    for (const it of items) {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
       let rest = it.text, first = true;
-      const h = measure(it.type, rest, it.type === 'p');
+      const h = heights[i];
       if (h <= H - used) {
         cur.push({ text: rest, type: it.type, indent: it.type === 'p', idx: it.idx });
         used += h;
@@ -4647,6 +4676,7 @@
         /* 断网时点「重新取回」：把这一章的失败结果从缓存里清掉再拉一次 */
         const rid = readerRoot.dataset.currentBook, rch = Number(readerRoot.dataset.currentCh) || 1;
         const rec = contentCache[rid];
+        /* 把失败标记一起删掉，否则下次 ensureChapter 会以为这章有结果 */
         if (rec && rec.chapters) delete rec.chapters[rch - 1];
         toast('正在重新取回…');
         showReader(rid, rch); break;
