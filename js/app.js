@@ -22,6 +22,37 @@
   const FONT_NAMES = { song: '宋体', hei: '黑体', kai: '楷体', fang: '仿宋' };
   const contentCache = {};
   const chapterInFlight = {};   /* bookId:no -> Promise，防止快速翻章时同一章被并发请求多次 */
+  /* 正文缓存必须有上限：一本本地卷正文常在 1–3MB，连开十几本书全留在内存里，
+     手机上的标签页很容易被系统回收。这里按「最近使用」排个序，超了就丢最久没碰的
+     —— 但正在读的那一卷（state.lastRead）和正在取章的卷永远不动。
+     被丢掉的只是内存副本，IndexedDB / localStorage 里的正文还在，下次打开重读即可。 */
+  const CACHE_MAX_BOOKS = 6;
+  const cacheOrder = [];
+  function cacheTouch(id) {
+    if (!id) return;
+    const i = cacheOrder.indexOf(id);
+    if (i >= 0) cacheOrder.splice(i, 1);
+    cacheOrder.push(id);
+    if (cacheOrder.length > CACHE_MAX_BOOKS) cacheTrim();
+  }
+  function cacheTrim() {
+    while (cacheOrder.length > CACHE_MAX_BOOKS) {
+      let victim = -1;
+      for (let i = 0; i < cacheOrder.length; i++) {
+        const id = cacheOrder[i];
+        if (id === state.lastRead) continue;                       /* 正在读的卷 */
+        let busy = false;
+        for (const k in chapterInFlight) {
+          if (k.indexOf(id + '::') === 0) { busy = true; break; }
+        }
+        if (busy) continue;                                        /* 有章节正在取回 */
+        victim = i; break;
+      }
+      if (victim < 0) break;
+      delete contentCache[cacheOrder[victim]];
+      cacheOrder.splice(victim, 1);
+    }
+  }
   let coverUid = 0;
   let readerToken = 0;
   let sourcesReady = Promise.resolve();
@@ -102,6 +133,7 @@
     if (!src || typeof src.getChapter !== 'function') return;
     if (SRC.getChapterSync(b.id, no)) return;
     const rec = contentCache[b.id] || (contentCache[b.id] = { id: b.id, chapters: [] });
+    cacheTouch(b.id);
     const prev = rec.chapters[no - 1];
     if (prev && prev.paras) return;
     /* 冷却期内复用上次的失败标记，不再发请求；用户点「重新取回」会删掉记录，立即放行 */
@@ -210,6 +242,7 @@
         };
         try { await saveContent(id, { id, chapters }); } catch (e) { weakSave += 1; }
         contentCache[id] = { id, chapters };
+        cacheTouch(id);
         if (r.cover) state.covers[id] = { image: r.cover };
         state.localBooks.unshift(meta);
         if (!state.shelf.includes(id)) state.shelf.unshift(id);
@@ -233,6 +266,7 @@
     for (const x of ids) {
       try { await deleteContent(x); } catch (e) { /* 记录可能已不存在 */ }
       delete contentCache[x];
+      const oi = cacheOrder.indexOf(x); if (oi >= 0) cacheOrder.splice(oi, 1);
       delete state.progress[x];
       delete state.covers[x];
       delete state.bookmarks[x];
@@ -742,9 +776,13 @@
     });
     return lines.join('\n');
   }
-  function downloadText(name, text) {
+  /* parts 可以是字符串，也可以是「片段数组」：备份文件动辄几 MB，
+     '\ufeff' + text 会先把整份 JSON 原样复制一遍再交给 Blob（峰值翻倍），
+     改成把 BOM 和正文当成两个片段，浏览器拼 Blob 时不必在 JS 堆里再落一份。 */
+  function downloadText(name, parts) {
     try {
-      const url = URL.createObjectURL(new Blob(['\ufeff' + text], { type: 'text/plain;charset=utf-8' }));
+      const list = Array.isArray(parts) ? parts : ['\ufeff' + parts];
+      const url = URL.createObjectURL(new Blob(list, { type: 'text/plain;charset=utf-8' }));
       const a = document.createElement('a');
       a.href = url; a.download = name;
       document.body.appendChild(a); a.click();
@@ -788,11 +826,23 @@
     EXTRA_KEYS.forEach((k) => {
       try { const v = localStorage.getItem(k); if (v != null) extras[k] = v; } catch (e) { /* 存储不可用 */ }
     });
-    const payload = {
-      app: BACKUP_APP, version: BACKUP_VER, exportedAt: new Date().toISOString(),
-      state, contents, extras
-    };
-    const ok = downloadText('墨卷备份-' + today() + '.json', JSON.stringify(payload));
+    /* 一份含 20 卷正文的备份可能几十 MB。整份 JSON.stringify 会先拼出一个巨型
+       字符串，紧接着 Blob 再复制一份，峰值能到原体积的 2–3 倍，手机上直接爆。
+       这里按「小字段 + 逐卷正文」分段序列化，交给 Blob 原生拼接，
+       JS 堆里同时只存在单卷那一份字符串。 */
+    const parts = ['\ufeff', '{"app":', JSON.stringify(BACKUP_APP),
+      ',"version":', String(BACKUP_VER),
+      ',"exportedAt":', JSON.stringify(new Date().toISOString()),
+      ',"state":', JSON.stringify(state),
+      ',"contents":{'];
+    let first = true;
+    Object.keys(contents).forEach((k) => {
+      if (!first) parts.push(',');
+      first = false;
+      parts.push(JSON.stringify(k), ':', JSON.stringify(contents[k]));
+    });
+    parts.push('},"extras":', JSON.stringify(extras), '}');
+    const ok = downloadText('墨卷备份-' + today() + '.json', parts);
     toast(ok
       ? '备份已导出 · 含 ' + Object.keys(contents).length + ' 卷本地卷正文'
         + (Object.keys(extras).length ? '、书源与音色配置' : '')
@@ -3604,7 +3654,7 @@
     const b = getBook(id); if (!b) return;
     if (!speechOK()) { toast('当前浏览器不支持语音朗读'); return; }
     if (b.local && !contentCache[id]) {
-      try { const rec = await loadContent(id); if (rec && rec.chapters) contentCache[id] = rec; } catch (e) { /* 忽略 */ }
+      try { const rec = await loadContent(id); if (rec && rec.chapters) { contentCache[id] = rec; cacheTouch(id); } } catch (e) { /* 忽略 */ }
     }
     if (!listen.active) {
       listen.prevOverflow = document.body.style.overflow;
@@ -3798,6 +3848,7 @@
         if (token !== readerToken) return;
         if (!rec || !rec.chapters) throw new Error('内容已丢失');
         contentCache[id] = rec;
+        cacheTouch(id);
       } catch (e) {
         toast('本地卷内容读取失败，请重新导入');
         go('shelf'); return;
@@ -4233,7 +4284,23 @@
     const q = (($('#searchBox') || {}).value || '').trim();
     clearTimeout(readerSearchTimer); readerSearchTimer = 0;
     runBookSearch(b, q);
-    if (hint) hint.innerHTML = '已检索全部 ' + total + ' 章';
+    /* 「done / total」只说明跑完了多少章，不等于取到了多少章：断网或书源限流时
+       整本跑完可能一大半是空的，用户会以为「全网没有这个词」。
+       这里把结果拆成「取到 / 冷却中 / 失败」三类，冷却的给一键重试。 */
+    const rec = contentCache[b.id];
+    let got = 0, cooling = 0, missing = 0;
+    for (let i = 0; i < total; i++) {
+      const c = rec && rec.chapters && rec.chapters[i];
+      if ((c && c.paras && c.paras.length) || SRC.getChapterSync(b.id, i + 1)) { got += 1; continue; }
+      if (c && c.error && Date.now() < (c.retryAt || 0)) cooling += 1; else missing += 1;
+    }
+    if (hint) {
+      let s = '已检索 ' + got + ' / ' + total + ' 章';
+      if (cooling) s += ' · ' + cooling + ' 章请求冷却中';
+      if (missing) s += ' · ' + missing + ' 章取回失败';
+      if (cooling || missing) s += ' · <button class="linklike" data-action="search-all">重试未取回的章</button>';
+      hint.innerHTML = s;
+    }
   }
 
   /* ---------- 路由 ---------- */
@@ -4765,7 +4832,15 @@
       case 'search-nav-prev': jumpSearchHit((ui.searchIdx || 0) - 1); break;
       case 'search-nav-next': jumpSearchHit((ui.searchIdx || 0) + 1); break;
       case 'search-nav-close': closeSearchNav(); break;
-      case 'search-all': searchAll(getBook(readerRoot.dataset.currentBook)); break;
+      /* 点「联网检索全书」＝用户主动要求再试：把冷却期提前作废，
+         否则断网恢复后点重试仍在冷却里的章节会被直接跳过 */
+      case 'search-all': {
+        const tb = getBook(readerRoot.dataset.currentBook);
+        const tr = tb && contentCache[tb.id];
+        if (tr && tr.chapters) tr.chapters.forEach((c) => { if (c && c.error) c.retryAt = 0; });
+        searchAll(tb);
+        break;
+      }
       case 'search-all-cancel': cancelSearchAll(); break;
       case 'reader-prev': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1); break;
       case 'reader-next': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1); break;

@@ -1568,3 +1568,69 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .book-card, .book-row { content-visibility: auto; }
 .book-card { contain-intrinsic-height: auto 238px; }
 .book-row { contain-intrinsic-height: auto 92px; }
+
+/* ============================================================
+   触点尺寸：浮在正文上、以及卡片角上的小控件原本只有 15–34px，
+   手指按上去容易落空或点错邻居。手机端只放大视觉尺寸、不动布局结构。
+   ============================================================ */
+@media (max-width: 767px), (pointer: coarse) {
+  .reader-top .icon-btn { width: 38px; height: 38px; }
+  /* 划线的取色圆点挨得很近，放大到 20px 同时拉开间距，避免点错颜色 */
+  .hl-pop { gap: 10px; }
+  .hl-dot { width: 20px; height: 20px; }
+  .hl-btn { padding: 8px 13px; }
+  /* 检索跳转条：左右箭头是最高频的操作 */
+  .search-nav .sn-btn { width: 44px; height: 44px; }
+  .search-nav .sn-x { width: 40px; height: 40px; }
+  .lm-close { width: 26px; height: 26px; right: -5px; top: -5px; }
+  .bm-del { padding: 9px; }
+  .cat-tabs button { padding: 10px 8px; }
+}
+
+/* ============================================================
+   手机横屏（高度很小）：竖屏那套内边距会把正文挤成两三行。
+   这里按「可用高度」而不是宽度来收紧，横握时正文才有地方站。
+   ============================================================ */
+@media (max-height: 560px) and (orientation: landscape) {
+  .topbar { padding: 6px 18px; }
+  .page { padding: 12px 18px 26px; }
+  .page-title { font-size: 19px; }
+  .page-head { margin-bottom: 12px; }
+  .section { margin-top: 18px; }
+  .banner { min-height: 132px; }
+  .banner-cover { width: 62px; right: 20px; }
+  .banner-inner { padding: 16px 20px; }
+  .banner-inner h2 { font-size: 18px; }
+  .banner-inner p { margin-bottom: 9px; }
+  .detail-hero { padding: 14px; gap: 14px; }
+  .detail-cover { width: 104px; }
+  .detail-info h1 { font-size: 21px; }
+  .continue-card { padding: 12px; gap: 12px; }
+  .continue-card .cover { width: 58px; }
+  .bottom-nav { padding: 3px 4px calc(3px + env(safe-area-inset-bottom)); }
+  .bottom-nav button { font-size: 9.5px; gap: 1px; }
+  .bottom-nav .ic { width: 18px; height: 18px; }
+  /* 阅读器：上下两条控制栏各让出十几像素给正文 */
+  .reader-top { padding: 4px 10px; }
+  .reader-top .icon-btn { width: 34px; height: 34px; }
+  .reader-top .rt-title { font-size: 12.5px; }
+  .reader-paper { padding: 14px 30px 22px; }
+  .reader-bottom { padding: 4px 12px calc(5px + env(safe-area-inset-bottom)); gap: 5px; }
+  .rb-mbtn span { display: none; }
+  .rb-mbtn { padding: 8px 11px; }
+  .rb-seek-row { gap: 8px; }
+  .flip-page { top: 14px; left: 26px; right: 26px; bottom: 34px; }
+  .flip-foot { bottom: 8px; }
+  .flip-shade { top: 14px; left: 26px; right: 26px; bottom: 34px; }
+  /* 听卷页同样按高度收紧 */
+  .listen-main { padding: 8px 18px; }
+  .listen-cover { width: 92px; margin-bottom: 6px; }
+  .listen-book { font-size: 16px; }
+  .listen-lyric { font-size: 12px; min-height: 2.6em; margin-top: 6px; }
+  .listen-buttons { gap: 20px; margin: 8px 0; }
+  .listen-play { width: 50px; height: 50px; }
+  .listen-bottom { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
+  .listen-top { padding: 6px 14px; }
+  .listen-mini { bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(20px + env(safe-area-inset-bottom)); }
+}
