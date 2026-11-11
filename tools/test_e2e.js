@@ -278,6 +278,56 @@ const newPage = async (browser, extra, errs) => {
     await p.close();
   }
 
+  /* ---------- H. 听卷页：整屏模态 / 进度条语义 / 键盘 ---------- */
+  {
+    const p = await newPage(browser, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.waitForTimeout(600);
+    const st = await p.evaluate(() => {
+      const l = document.getElementById('listen'), rd = document.getElementById('reader');
+      const t = document.getElementById('lpTrack');
+      const b = document.getElementById('listenPlay');
+      return {
+        role: l.getAttribute('role'), modal: l.getAttribute('aria-modal'),
+        readerInert: rd.hasAttribute('inert'),
+        trackRole: t.getAttribute('role'), trackNow: t.getAttribute('aria-valuenow'),
+        playLabel: b.getAttribute('aria-label'),
+        focusIn: l.contains(document.activeElement)
+      };
+    });
+    ok('听卷页是整屏对话框', st.role === 'dialog' && st.modal === 'true');
+    ok('听卷页打开时阅读器被 inert', st.readerInert === true);
+    ok('听卷进度条有 slider 语义与进度值', st.trackRole === 'slider' && /^\d+$/.test(st.trackNow || ''));
+    ok('播放键有可读的名称', st.playLabel === '暂停' || st.playLabel === '播放');
+    ok('焦点进入听卷页', st.focusIn === true);
+    /* Tab 不该跑到背后的阅读器上 */
+    let escaped = false;
+    for (let i = 0; i < 12; i++) {
+      await p.keyboard.press('Tab');
+      if (!(await p.evaluate(() => !!document.activeElement.closest('#listen')))) { escaped = true; break; }
+    }
+    ok('听卷页内 Tab 不会穿到背后', !escaped);
+    /* 空格 = 播放 / 暂停 */
+    await p.evaluate(() => document.getElementById('listen').focus());
+    const a1 = await p.getAttribute('#listenPlay', 'aria-label');
+    await p.keyboard.press(' ');
+    await p.waitForTimeout(350);
+    const a2 = await p.getAttribute('#listenPlay', 'aria-label');
+    ok('空格切换播放 / 暂停', a1 !== a2, a1 + ' -> ' + a2);
+    /* Esc 只是收起，不停止朗读 */
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(500);
+    ok('Esc 把听卷页收成迷你条而不是直接停',
+      (await p.locator('#listen').isHidden()) && (await p.locator('#listenMini').isVisible())
+      && !(await p.evaluate(() => document.getElementById('reader').hasAttribute('inert'))));
+    await p.click('[data-action="listen-close"]');
+    await p.waitForTimeout(300);
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

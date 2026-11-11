@@ -1495,7 +1495,9 @@
         ['t', '打开听卷'], ['c', '目录 / 卷签 / 笔记'],
         ['s', '字号与纸张设置'], ['n', '切换夜墨 / 日光'], ['Esc', '退出阅读器']]],
       ['划词与笔记', [['选中一段文字', '浮出「划线 / 批注」工具条'],
-        ['Esc', '收起工具条 / 清空笔记搜索']]]
+        ['Esc', '收起工具条 / 清空笔记搜索']]],
+      ['听卷时', [['空格', '播放 / 暂停'], ['← / →', '上一章 / 下一章'],
+        ['进度条上 ← / →', '快退 / 快进一小段'], ['Esc', '收成迷你条（再按一次停止）']]]
     ];
     root.innerHTML = `<div class="sh-backdrop" data-action="close-shortcut-help"></div>
       <div class="sh-card" role="dialog" aria-label="键盘捷径说明">
@@ -2385,6 +2387,12 @@
       e.preventDefault(); e.stopImmediatePropagation();
       seekToRatio(clamp01(readerOverall() + (e.key === 'ArrowRight' ? 0.02 : -0.02)));
     }
+    /* 听卷进度条：Tab 能停到它上面，方向键就该能调，不然它只是一块看得见摸不着的色条 */
+    if (document.activeElement && document.activeElement.id === 'lpTrack' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      const cur = listen.text ? listen.charIndex / listen.text.length : 0;
+      listenSeekRatio(cur + (e.key === 'ArrowRight' ? 0.02 : -0.02));
+    }
   });
 
   /* ---------- 卷签 ---------- */
@@ -2937,9 +2945,20 @@
     const total = listen.text.length / Math.max(1, listen.rate * 4.6);
     const elapsed = listen.elapsed + (listen.playing && listen.startedAt ? (Date.now() - listen.startedAt) / 1000 : 0);
     const bar = $('#lpBar'); if (bar) bar.style.width = (listen.text ? Math.min(100, listen.charIndex / listen.text.length * 100) : 0) + '%';
+    /* 进度条是 role=slider：读屏要知道走到哪儿了，光靠 width 它读不出来 */
+    const track = $('#lpTrack');
+    if (track) {
+      const pct = listen.text ? Math.round(Math.min(1, listen.charIndex / listen.text.length) * 100) : 0;
+      track.setAttribute('aria-valuenow', String(pct));
+      track.setAttribute('aria-valuetext', pct + '%，' + fmtTime(elapsed) + ' / ' + fmtTime(total));
+    }
     const now = $('#lpNow'); if (now) now.textContent = fmtTime(elapsed);
     const all = $('#lpTotal'); if (all) all.textContent = fmtTime(total);
-    const play = $('#listenPlay'); if (play) play.innerHTML = icon(listen.playing ? 'pause' : 'play', 'ic-lg');
+    const play = $('#listenPlay');
+    if (play) {
+      play.innerHTML = icon(listen.playing ? 'pause' : 'play', 'ic-lg');
+      play.setAttribute('aria-label', listen.playing ? '暂停' : '播放');
+    }
     const lmPlay = $('#lmPlay'); if (lmPlay) lmPlay.innerHTML = icon(listen.playing ? 'pause' : 'play');
     const lyric = $('#listenLyric'); if (lyric) lyric.textContent = listen.paras[listen.paraIndex] || '';
     const cover = $('#listenCover'); if (cover) cover.classList.toggle('playing', listen.playing);
@@ -3360,11 +3379,12 @@
   }
   function listenShell(b) {
     const chs = chapterList(b);
-    return `<div class="listen" id="listen" data-paper="${state.settings.paper}">
+    return `<div class="listen" id="listen" tabindex="-1" role="dialog" aria-modal="true"
+        aria-label="听卷 · ${esc(b.title)}" data-paper="${state.settings.paper}">
       <div class="listen-top">
-        <button class="icon-btn" data-action="listen-minimize" title="收起听卷（继续播放）">${icon('close')}</button>
+        <button class="icon-btn" data-action="listen-minimize" title="收起听卷（继续播放）" aria-label="收起听卷，继续播放">${icon('close')}</button>
         <div class="listen-top-title">听 卷 · ${esc(b.title)}</div>
-        <button class="icon-btn" data-action="listen-minimize" title="收起，边听边读">${icon('minimize')}</button>
+        <button class="icon-btn" data-action="listen-minimize" title="收起，边听边读" aria-label="收起，边听边读">${icon('minimize')}</button>
       </div>
       <div class="listen-main">
         <div class="listen-cover" id="listenCover">${coverHtml(b)}</div>
@@ -3376,13 +3396,15 @@
       <div class="listen-bottom">
         <div class="listen-progress">
           <span id="lpNow">00:00</span>
-          <div class="progress-line" data-action="listen-seek" id="lpTrack"><i id="lpBar"></i></div>
+          <div class="progress-line" data-action="listen-seek" id="lpTrack" role="slider" tabindex="0"
+            aria-label="朗读进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0%"><i id="lpBar"></i></div>
           <span id="lpTotal">--:--</span>
         </div>
         <div class="listen-buttons">
-          <button class="icon-btn lg" data-action="listen-prev" title="上一章">${icon('stepback')}</button>
-          <button class="listen-play" data-action="listen-toggle" id="listenPlay">${icon(listen.playing ? 'pause' : 'play', 'ic-lg')}</button>
-          <button class="icon-btn lg" data-action="listen-next" title="下一章">${icon('stepforward')}</button>
+          <button class="icon-btn lg" data-action="listen-prev" title="上一章" aria-label="上一章">${icon('stepback')}</button>
+          <button class="listen-play" data-action="listen-toggle" id="listenPlay"
+            aria-label="${listen.playing ? '暂停' : '播放'}">${icon(listen.playing ? 'pause' : 'play', 'ic-lg')}</button>
+          <button class="icon-btn lg" data-action="listen-next" title="下一章" aria-label="下一章">${icon('stepforward')}</button>
         </div>
         <div class="listen-tools">
           <button data-action="listen-panel" data-val="rate" id="ltRate">语速 ${fmtRate(listen.rate)}×</button>
@@ -3433,6 +3455,42 @@
     }
     listenRenderDynamic();
     if (listen.active) listenMediaSession(true);
+    syncListenInert();
+    /* 展开成全屏听卷页时把焦点交给它，不然键盘/spell 还停在背后的阅读器上 */
+    if (listen.expanded && l && !l.hidden && !l.contains(document.activeElement)) {
+      l.focus({ preventScroll: true });
+    }
+  }
+  /* 听卷页展开时铺满整屏（fixed inset:0），背后内容照样在 Tab 序列与无障碍树里。
+     这里按「是否展开」给主干让路；收起成迷你条就还回去。 */
+  /* 跳到整章的第 ratio 段（0–1）：拖动进度条与键盘左右键共用。
+     落到「句」的起点，不从半句话中间切。 */
+  function listenSeekRatio(ratio) {
+    if (!listen.text || !listen.sents.length) return;
+    ratio = Math.max(0, Math.min(1, ratio || 0));
+    const target = Math.floor(ratio * listen.text.length);
+    let hit = 0;
+    listen.sents.forEach((sn, k) => { if (sn.start <= target) hit = k; });
+    listen.sentIndex = hit;
+    const hs = listen.sents[hit];
+    listen.charIndex = hs ? hs.start : 0;
+    listen.paraIndex = hs ? hs.para : 0;
+    listen.elapsed = ratio * (listen.text.length / Math.max(1, listen.rate * 4.6));
+    if (listen.playing) listenSpeak(true); else listenRenderDynamic();
+  }
+  function listenFullOpen() { return !!(listen.active && listen.expanded); }
+  function syncListenInert() {
+    const on = listenFullOpen();
+    ['#view', '.topbar', '#bottomNav', '.sidebar'].forEach((sel) => {
+      const el = $(sel); if (!el) return;
+      if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+      else if (!readerRoot.dataset.currentBook) { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+    });
+    const rd = $('#reader');
+    if (rd) {
+      if (on) { rd.setAttribute('inert', ''); rd.setAttribute('aria-hidden', 'true'); }
+      else { rd.removeAttribute('inert'); rd.removeAttribute('aria-hidden'); }
+    }
   }
   /* 悬浮球拖动：逐帧只写一次 transform（走合成层，不触发布局），
      宽高与活动范围在按下时量一次，避免「写样式→读 offsetWidth→再写」的强制重排 */
@@ -3681,6 +3739,8 @@
     $$('#flipPage .lp-active').forEach((el) => el.classList.remove('lp-active'));
     listenReleaseWakeLock();
     document.body.style.overflow = listen.prevOverflow || '';
+    /* 听卷页撤了，把背后被它让开的阅读器 / 页面收回来 */
+    syncListenInert();
   }
   async function openListen(id, ch) {
     const b = getBook(id); if (!b) return;
@@ -3994,17 +4054,17 @@
   function syncModalInert() {
     const z = findOpenModal();
     const on = !!z;
-    /* #view 等主干：阅读器开着时本来就被 setBgInert 设过，关弹窗不能替它撤掉 */
+    /* #view 等主干：阅读器或全屏听卷页占着屏时本来就被设过，关弹窗不能替它们撤掉 */
     ['#view', '.topbar', '#bottomNav', '.sidebar'].forEach((sel) => {
       const el = $(sel); if (!el) return;
       if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
-      else if (!readerRoot.dataset.currentBook) { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+      else if (!readerRoot.dataset.currentBook && !listenFullOpen()) { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
     });
     /* 阅读器本体：弹窗盖在它上面时也得让开 */
     const rd = $('#reader');
     if (rd) {
       if (on) { rd.setAttribute('inert', ''); rd.setAttribute('aria-hidden', 'true'); }
-      else { rd.removeAttribute('inert'); rd.removeAttribute('aria-hidden'); }
+      else if (!listenFullOpen()) { rd.removeAttribute('inert'); rd.removeAttribute('aria-hidden'); }
     }
     if (on && !modalWasOpen) {
       const a = document.activeElement;
@@ -5112,17 +5172,7 @@
         const track = e.target.closest('.progress-line');
         if (!track || !listen.text) break;
         const rect = track.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        /* 拖到哪就从那一句开始念，别从半句话中间切 */
-        const target = Math.floor(ratio * listen.text.length);
-        let hit = 0;
-        listen.sents.forEach((sn, k) => { if (sn.start <= target) hit = k; });
-        listen.sentIndex = hit;
-        const hs = listen.sents[hit];
-        listen.charIndex = hs ? hs.start : 0;
-        listen.paraIndex = hs ? hs.para : 0;
-        listen.elapsed = ratio * (listen.text.length / Math.max(1, listen.rate * 4.6));
-        if (listen.playing) listenSpeak(true); else listenRenderDynamic();
+        listenSeekRatio((e.clientX - rect.left) / rect.width);
         break;
       }
       case 'open-panel': openPanel(val); break;
@@ -5408,7 +5458,9 @@
        表单类弹窗（快捷键说明等）盖在最上层，优先圈在弹窗里。 */
     if (e.key === 'Tab') {
       const drawer = $('#catalogDrawer'), panel = $('#readerPanel'), sd = $('#searchDrawer');
-      const dlg = findOpenModal() || [drawer, panel, sd].find((el) => el && !el.hidden);
+      const dlg = findOpenModal()
+        || (listenFullOpen() ? $('#listen') : null)
+        || [drawer, panel, sd].find((el) => el && !el.hidden);
       if (dlg) {
         const f = Array.from(dlg.querySelectorAll(
           'button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -5438,7 +5490,13 @@
       if (ui.coverDraft) { closeCoverEditor(); return; }
       if (ui.metaDraft) { closeMetaEditor(); return; }
       if ($('#shelfMenu')) { closeShelfMenu(); return; }
-      if (listen.active) { listenStopAll(); return; }
+      /* 听卷页按 Esc 先收起成迷你条（还在播，能边听边读），
+         迷你条上再按才真的停掉——一按 Esc 就断朗读太狠了 */
+      if (listen.active) {
+        if (listen.expanded) { listen.expanded = false; renderListen(); }
+        else listenStopAll();
+        return;
+      }
       /* 书城 / 藏卷页压根没有 #searchDrawer，不判空会抛 TypeError，
          把整个 keydown 处理器打断，连 ?、Enter、翻页键都一起失效 */
       const sd = $('#searchDrawer');
@@ -5474,6 +5532,25 @@
       const first = $$('#catalogList li').find((li) => !li.hidden);
       if (first) first.click();
       return;
+    }
+    /* 听卷页铺满全屏时，键盘先归它：空格播放/暂停，左右切章。
+       焦点落在按钮或进度条上时让它们自己处理，别抢。 */
+    if (listenFullOpen()) {
+      const a0 = document.activeElement;
+      const onCtl = !a0 || /BUTTON|A|INPUT|TEXTAREA|SELECT/.test(a0.tagName) || a0.id === 'lpTrack';
+      if (!onCtl) {
+        if (e.key === ' ') {
+          e.preventDefault();
+          const p = $('#listenPlay'); if (p) p.click();
+          return;
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          const btn = document.querySelector(e.key === 'ArrowLeft' ? '[data-action="listen-prev"]' : '[data-action="listen-next"]');
+          if (btn) btn.click();
+          return;
+        }
+      }
     }
     const inReader = !!readerRoot.dataset.currentBook;
     if (inReader && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
