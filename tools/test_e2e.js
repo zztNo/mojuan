@@ -469,6 +469,13 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(700);
     ok('回到页面自动接着念',
       (await p.evaluate(() => window.__tts.__spoke.length)) > bf.spoke);
+    /* 换章：章名、正文、朗读文本三样都得跟着走（本地书这条路径是实的） */
+    const ch1 = await p.textContent('#listenChapter');
+    await p.click('[data-action="listen-next"]');
+    await p.waitForTimeout(700);
+    const ch2 = await p.textContent('#listenChapter');
+    ok('听卷换章后章名跟着变', ch1 !== ch2 && /葛覃/.test(ch2 || ''), (ch1 || '') + ' -> ' + (ch2 || ''));
+    ok('换章后朗读文本也换了', (await p.evaluate(() => window.__tts.__spoke.slice(-1)[0])) !== undefined);
     await p.close();
   }
 

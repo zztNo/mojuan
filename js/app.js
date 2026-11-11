@@ -112,6 +112,21 @@
     const why = c && c.error ? '（' + c.error + '）' : '';
     return ['（这一章暂未取到正文' + why + '，点下方「重新取回」再试一次）'];
   }
+  /* 这一章现在拿不拿得到正文：paragraphs() 取不到时会塞一句提示当正文，
+     听卷不能把提示念出来，也得能分清「空章」和「没取回来」。 */
+  function hasChapterBody(b, no) {
+    if (!b) return false;
+    if (b.local) {
+      const rec = contentCache[b.id];
+      const c = rec && rec.chapters && rec.chapters[no - 1];
+      return !!(c && c.paras && c.paras.length);
+    }
+    const sync = SRC.getChapterSync(b.id, no);
+    if (sync && sync.length) return true;
+    const rec = contentCache[b.id];
+    const c = rec && rec.chapters && rec.chapters[no - 1];
+    return !!(c && c.paras && c.paras.length);
+  }
   /* 搜索用：把「现在拿得到」的章节正文摊平成一个数组，取不到的留 null。
      内置卷走同步源（单文件离线版也走这条），在线 / 本地卷走 contentCache。 */
   function loadedParas(b, rec) {
@@ -2849,7 +2864,9 @@
     /* 自愈用：本句开口时刻、最近一次「有动静」的时刻、连续卡住次数 */
     sentAt: 0, lastBeat: 0, stall: 0,
     /* 进 bfcache 前是否在播：重新现身时用它决定要不要自动接着念 */
-    pausedByHide: false
+    pausedByHide: false,
+    /* 正在取回下一章：这期间不念、不跟随、不巡检，界面只说「在取」 */
+    busy: false
   };
   let ttsGen = 0, listenTimer = null, listenTick = null, keepAudio = null, lastCommit = 0;
   let listenFadeTimer = null;
@@ -3049,6 +3066,14 @@
     const lmPlay = $('#lmPlay'); if (lmPlay) lmPlay.innerHTML = icon(listen.playing ? 'pause' : 'play');
     const lyric = $('#listenLyric'); if (lyric) lyric.textContent = listen.paras[listen.paraIndex] || '';
     const cover = $('#listenCover'); if (cover) cover.classList.toggle('playing', listen.playing);
+    /* 章名跟着 listen.ch 走：换章取回期间至少让人看见「在取哪一章」 */
+    const chEl = $('#listenChapter');
+    if (chEl) {
+      const bb = getBook(listen.bookId);
+      const title = bb ? ((chapterList(bb)[listen.ch - 1] || {}).title || '') : '';
+      const text = title + (listen.busy ? ' · 正在取回…' : '');
+      if (chEl.textContent !== text) chEl.textContent = text;
+    }
     const rate = $('#ltRate'); if (rate) rate.textContent = '语速 ' + fmtRate(listen.rate) + '×';
     const timer = $('#ltTimer');
     if (timer) timer.textContent = listen.fadeOut ? '即将收卷'
@@ -3057,8 +3082,9 @@
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.playbackState = listen.playing ? 'playing' : 'paused'; } catch (e) { /* 忽略 */ }
     }
-    /* 边听边读：翻页模式自动翻到朗读段所在页；滚动模式收起时才滚动跟随 */
-    listenFollowPara();
+    /* 边听边读：翻页模式自动翻到朗读段所在页；滚动模式收起时才滚动跟随。
+       正在取下一章时正文还是旧的，跟随只会把眼睛带到错的地方。 */
+    if (!listen.busy) listenFollowPara();
   }
   let lastFollow = 0, lastLP = null;
   /* 听书时尽量不让设备锁屏熄火：WakeLock 比静音音轨保活更优雅，不支持的浏览器自动跳过，
@@ -3310,6 +3336,7 @@
     listenPlaySent(gen);
   }
   function listenWatchdog() {
+    if (listen.busy) return;
     if (!listen.active || !listen.playing || listen.fadeOut) return;
     const s = listen.sents[listen.sentIndex];
     if (!s) return;
@@ -3320,6 +3347,7 @@
   }
   /* 回前台时更急一点：后台断掉的话 lastBeat 早就停在断开那一刻了 */
   function listenRevive() {
+    if (listen.busy) return;
     if (!listen.active || !listen.playing || listen.fadeOut) return;
     listenEnsureResumed();
     if (remoteAudio && !remoteAudio.paused && !remoteAudio.ended) return;
@@ -3377,6 +3405,7 @@
     listenPrefetch(listen.sentIndex + 1);
   }
   function listenSpeak(resume) {
+    if (listen.busy) return;
     if (!listen.sents.length) return;
     if (!listenRemoteOn() && !speechOK()) return;
     const gen = ++ttsGen;
@@ -3540,10 +3569,27 @@
   }
   async function listenGoChapter(ch, autoplay) {
     const b = getBook(listen.bookId); if (!b) return;
-    listen.ch = Math.max(1, Math.min(chapterList(b).length, ch));
-    if (!b.local) {
-      await ensureChapter(b, listen.ch);
+    const target = Math.max(1, Math.min(chapterList(b).length, ch));
+    const prev = listen.ch;
+    listen.ch = target;
+    /* 在线书换到还没取回来的章节：先说一声在取，别停在新章名 + 旧音频那种半吊子状态；
+       实在取不回来也得老实承认，否则就成了「一键没声」的假播放。 */
+    if (!b.local && !hasChapterBody(b, target)) {
+      listen.busy = true;
+      listen.charIndex = 0; listen.paraIndex = 0;
+      renderListen();
+      await ensureChapter(b, target);
+      listen.busy = false;
       if (!listen.active) return;
+    }
+    if (!hasChapterBody(b, target)) {
+      listen.ch = prev;
+      listen.playing = false;
+      listen.stall = 0;
+      listenReleaseWakeLock();
+      renderListen();
+      toast(b.local ? '这一章没有可朗读的内容' : '这一章没取回来，连上网络再试');
+      return;
     }
     listenLoadText();
     if (state.listenPos) delete state.listenPos[listen.bookId]; /* 换章从头听 */
@@ -3932,7 +3978,7 @@
     }
     listen.active = true; listen.expanded = true;
     listen.bookId = id; listen.ch = Math.max(1, Math.min(chapterList(b).length, ch || (state.progress[id] || {}).ch || 1));
-    if (!b.local) {
+    if (!b.local && !hasChapterBody(b, listen.ch)) {
       await ensureChapter(b, listen.ch);
       listen.ch = Math.max(1, Math.min(chapterList(b).length, listen.ch));
     }
@@ -3942,7 +3988,14 @@
     /* 每次重新打开听卷都再试一次在线音色，别因为上次失败就永远不用 */
     listen.remoteOff = false;
     remoteWarned = false;
-    if (!listenLoadText()) { toast('这一章没有可朗读的内容'); listen.active = false; return; }
+    /* 正文没到手时别开卷：原来会把「这一章暂未取到正文」的提示当成正文念出来 */
+    if (!hasChapterBody(b, listen.ch)) {
+      listen.active = false;
+      document.body.style.overflow = listen.prevOverflow || '';
+      toast(b.local ? '这一章没有可朗读的内容' : '这一章还没取回正文，先到目录里重新取回');
+      return;
+    }
+    listenLoadText();
     /* 上次听到一半就从那一句接着听，听完的从头来 */
     const resumeAt = listenResumeIndex();
     if (resumeAt > 0) {
