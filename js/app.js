@@ -1567,8 +1567,10 @@
     const groups = [
       ['随处可用', [['1 / 2 / 3', '书肆 / 藏卷 / 墨斋'], ['/', '去书肆搜卷'],
         ['? 或 F1', '打开这份说明'], ['Esc', '关闭面板 / 清空搜索 / 收起听卷']]],
-      ['读墨时', [['← / PageUp', '上一页（滚动模式为上一章）'],
-        ['→ / PageDown / 空格', '下一页（滚动模式为下一章）'],
+      ['读墨时', [['← / →', '翻页；滚动模式为上一章 / 下一章'],
+        ['空格 / PageDown', '往后翻；滚动模式滚一屏（到底再按换下一章）'],
+        ['Shift+空格 / PageUp', '往回翻；滚动模式往回滚一屏'],
+        ['↑ / ↓', '滚动模式下上下滚一点'],
         ['t', '打开听卷'], ['c', '目录 / 卷签 / 笔记'],
         ['s', '字号与纸张设置'], ['n', '切换夜墨 / 日光'], ['Esc', '退出阅读器']]],
       ['划词与笔记', [['选中一段文字', '浮出「划线 / 批注」工具条'],
@@ -2113,6 +2115,18 @@
     /* 兜底：切到后台时 onfinish 不一定来，别把翻页卡在锁上 */
     setTimeout(() => { if (flipBusy) finish(); }, 240 + 140);
     return true;
+  }
+  /* 上下滚动模式里按空格 / PageDown 滚一屏；已经到头还往前，就像翻页那样换章，
+     否则用户会以为按键失灵。滚到底再换章也符合「读到本章末」的直觉。 */
+  function scrollReaderBody(body, dy, pageStep) {
+    const max = Math.max(0, body.scrollHeight - body.clientHeight);
+    const before = body.scrollTop;
+    const to = Math.max(0, Math.min(max, before + dy));
+    body.scrollTop = to; /* .reader-body 带 scroll-behavior:smooth，这里是带动画滚 */
+    if (!pageStep || Math.abs(to - before) >= 1) return;
+    const id = readerRoot.dataset.currentBook;
+    const ch = Number(readerRoot.dataset.currentCh);
+    switchChapter(id, ch + (dy > 0 ? 1 : -1));
   }
   function flipBy(delta) {
     const fs = flipState;
@@ -5922,11 +5936,31 @@
       /* 焦点在原生按钮/链接上按空格，浏览器会自己激活它，别顺手再翻一页 */
       if (e.key === ' ' && /BUTTON|A|SELECT|INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
       const paging = state.settings.pageMode === 'flip' && $('#reader');
+      /* 上下滚动模式：空格 / PageUp / PageDown / 上下键先滚正文。
+         以前这些键不分模式一律「换章」，按一下空格就跳到下一章，读到哪儿全丢了。 */
+      const scrollBody = paging ? null : $('#readerBody');
+      if (scrollBody) {
+        const vh = scrollBody.clientHeight || 600;
+        if (e.key === ' ') {
+          e.preventDefault();
+          scrollReaderBody(scrollBody, (e.shiftKey ? -1 : 1) * Math.round(vh * 0.86), true);
+          return;
+        }
+        if (e.key === 'PageDown' || e.key === 'PageUp') {
+          e.preventDefault();
+          scrollReaderBody(scrollBody, (e.key === 'PageDown' ? 1 : -1) * Math.round(vh * 0.86), true);
+          return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          scrollReaderBody(scrollBody, (e.key === 'ArrowDown' ? 1 : -1) * 120, false);
+          return;
+        }
+      }
       if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         paging ? flipBy(-1) : switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1);
       }
       if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
-        if (e.key === ' ') e.preventDefault();
         paging ? flipBy(1) : switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1);
       }
       return;

@@ -587,6 +587,49 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- L. 上下滚动模式：空格 / PageDown 滚正文，不是直接换章 ---------- */
+  {
+    const p = await newPage(browser, { settings: { pageMode: 'scroll', fs: 19, lh: 2 }, progress: { shijing: { ch: 1, pct: 0, updated: 5 } } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerBody', { timeout: 8000 });
+    await p.waitForTimeout(400);
+    const st0 = await p.evaluate(() => {
+      const bd = document.getElementById('readerBody');
+      return { top: bd.scrollTop, max: bd.scrollHeight - bd.clientHeight };
+    });
+    ok('这一章能滚动（前提成立）', st0.max > 0, JSON.stringify(st0));
+    await p.evaluate(() => document.getElementById('reader').focus());
+    await p.keyboard.press('Space');
+    await p.waitForTimeout(700);
+    const st1 = await p.evaluate(() => ({
+      top: document.getElementById('readerBody').scrollTop,
+      ch: location.hash.split('/').pop()
+    }));
+    ok('空格滚正文而不是换章', st1.top > 0 && st1.ch === '1', JSON.stringify(st1));
+    await p.evaluate(() => {
+      const bd = document.getElementById('readerBody');
+      bd.style.scrollBehavior = 'auto';
+      bd.scrollTop = 0;
+    });
+    await p.waitForTimeout(200);
+    await p.keyboard.press('ArrowDown');
+    await p.waitForTimeout(400);
+    const st2 = await p.evaluate(() => document.getElementById('readerBody').scrollTop);
+    ok('方向键也能滚', st2 > 0, String(st2));
+    /* 滚到底再按空格：这时候才该换章 */
+    await p.evaluate(() => {
+      const bd = document.getElementById('readerBody');
+      bd.style.scrollBehavior = 'auto';
+      bd.scrollTop = bd.scrollHeight;
+    });
+    await p.waitForTimeout(200);
+    await p.keyboard.press('Space');
+    await p.waitForTimeout(900);
+    const st3 = await p.evaluate(() => location.hash.split('/').pop());
+    ok('到底再按空格才换到下一章', st3 === '2', st3);
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {
