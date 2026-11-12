@@ -666,6 +666,41 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- N. 滚动模式改字号 / 行距，停在原来读到的那一段 ---------- */
+  {
+    const p = await newPage(browser, { settings: { pageMode: 'scroll', fs: 19, lh: 2 } }, errs);
+    await p.goto(FILE + '#/reader/chuci/1');
+    await p.waitForSelector('#readerBody', { timeout: 8000 });
+    await p.waitForTimeout(500);
+    const topPara = () => p.evaluate(() => {
+      const bd = document.getElementById('readerBody');
+      const ps = [...bd.querySelectorAll('p[data-pi]')];
+      const line = bd.getBoundingClientRect().top;
+      let el = ps[0];
+      ps.forEach((x) => { if (x.getBoundingClientRect().top <= line + 1) el = x; });
+      return { pi: el.dataset.pi, txt: (el.textContent || '').slice(0, 16) };
+    });
+    await p.evaluate(() => {
+      const bd = document.getElementById('readerBody');
+      bd.style.scrollBehavior = 'auto';
+      bd.scrollTop = Math.round((bd.scrollHeight - bd.clientHeight) * 0.5);
+    });
+    await p.waitForTimeout(300);
+    const before = await topPara();
+    ok('滚动到章中间，顶端有具体段落（前提成立）', Number(before.pi) > 5, before.pi);
+    await p.evaluate(() => document.querySelector('[data-action="reader-settings"]').click());
+    await p.waitForTimeout(250);
+    await p.evaluate(() => { const el = document.querySelector('[data-action="set-font"][data-val="24"]'); if (el) el.click(); });
+    await p.waitForTimeout(700);
+    const afterFs = await topPara();
+    ok('字号 19→24 后仍停在同一段', afterFs.txt === before.txt && afterFs.pi === before.pi, JSON.stringify(afterFs));
+    await p.evaluate(() => { const el = document.querySelector('[data-action="set-lh"][data-val="1.7"]'); if (el) el.click(); });
+    await p.waitForTimeout(700);
+    const afterLh = await topPara();
+    ok('行距 2→1.7 后仍停在同一段', afterLh.txt === before.txt && afterLh.pi === before.pi, JSON.stringify(afterLh));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

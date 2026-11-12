@@ -4131,21 +4131,49 @@
     state.lastRead = sp.id;
     return true;
   }
+  /* 滚动模式下「正在读的那一段」：视口顶端落在哪一段、偏了几成。
+     字号 / 行距 / 字体一变整章重排，按滚动比例还原会漂出好几段（视口能装的行数变了），
+     按段落还原才真的停在原来那句话上。 */
+  function scrollAnchorOf(body) {
+    const paper = $('#readerPaper');
+    if (!body || !paper) return null;
+    const line = body.getBoundingClientRect().top;
+    const ps = paper.querySelectorAll('p[data-pi]');
+    if (!ps.length) return null;
+    let best = null, frac = 0;
+    for (let i = 0; i < ps.length; i += 1) {
+      const r = ps[i].getBoundingClientRect();
+      if (r.top > line + 1) break;
+      best = ps[i];
+      frac = r.height > 0 ? Math.min(1, Math.max(0, (line - r.top) / r.height)) : 0;
+    }
+    if (!best) { best = ps[0]; frac = 0; }
+    return { pi: best.dataset.pi, frac };
+  }
+  function applyScrollAnchor(body, a) {
+    const el = body && body.querySelector('#readerPaper p[data-pi="' + a.pi + '"]');
+    if (!el) return false;
+    const r = el.getBoundingClientRect(), br = body.getBoundingClientRect();
+    body.scrollTop = Math.max(0, r.top - br.top + body.scrollTop + a.frac * r.height);
+    return true;
+  }
   /* 改完字号 / 行距后的统一收尾：翻页模式重排；滚动模式保住原来的阅读位置 */
   function restyleReader() {
     const body = $('#readerBody');
     const isFlip = state.settings.pageMode === 'flip';
-    let ratio = 0;
+    let ratio = 0, anchor = null;
     if (!isFlip && body) {
       const max = body.scrollHeight - body.clientHeight;
       ratio = max > 0 ? body.scrollTop / max : 0;
+      anchor = scrollAnchorOf(body);
     }
     applyReaderStyle();
     if (isFlip) { scheduleReflow(); return; }
     /* 滚动模式不会重新渲染节点，字号一变浏览器就地重排，scrollTop 数值不变但位置会挪，
-       所以按比例把它拉回原处（等下一帧，布局算完再设） */
+       所以按段落锚点把它拉回原处（等下一帧，布局算完再设） */
     if (body) {
       requestAnimationFrame(() => {
+        if (anchor && applyScrollAnchor(body, anchor)) return;
         const max = body.scrollHeight - body.clientHeight;
         if (max > 0) body.scrollTop = Math.round(ratio * max);
       });
