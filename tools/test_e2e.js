@@ -766,6 +766,67 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- O. 窄屏听卷工具条：五个键排成 3 + 2，别剩「范围」孤零零一行 ---------- */
+  {
+    const rowsAt = async (w) => {
+      const p = await newPage(browser, { shelf: ['shijing'] }, errs);
+      await p.setViewportSize({ width: w, height: 760 });
+      await p.goto(FILE + '#/reader/shijing/1');
+      await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+      await p.click('#ttsBtn');
+      await p.waitForSelector('#listen', { timeout: 8000 });
+      await p.waitForTimeout(300);
+      const r = await p.evaluate(() => {
+        const tops = [...document.querySelectorAll('.listen-tools button')]
+          .map((e) => Math.round(e.getBoundingClientRect().top));
+        const groups = [];
+        tops.forEach((t) => {
+          const hit = groups.find((g) => g[0] === t);
+          if (hit) hit[1] += 1; else groups.push([t, 1]);
+        });
+        return groups.map((g) => g[1]);
+      });
+      await p.close();
+      return JSON.stringify(r);
+    };
+    const narrow = await rowsAt(360);
+    ok('360 宽：工具键排成 3 + 2', narrow === '[3,2]', narrow);
+    const wide = await rowsAt(430);
+    ok('430 宽：工具键仍是一行', wide === '[5]', wide);
+  }
+
+  /* ---------- P. 听卷读屏：换章 / 改范围 / 设定时都要念出来（阅读器那个 live 区是 inert 的） ---------- */
+  {
+    const p = await newPage(browser, { shelf: ['shijing'] }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.waitForTimeout(400);
+    const live = () => p.evaluate(() => ({
+      text: (document.getElementById('listenAnnounce') || {}).textContent || '',
+      role: (document.getElementById('listenAnnounce') || {}).getAttribute
+        ? document.getElementById('listenAnnounce').getAttribute('role') : ''
+    }));
+    const l0 = await live();
+    ok('听卷有自己的 polite 播报区', l0.role === 'status', l0.role);
+    await p.click('[data-action="listen-next"]');
+    await p.waitForTimeout(800);
+    const l1 = await live();
+    ok('换章会播报新章名', /第 2 章/.test(l1.text) && /葛覃/.test(l1.text), l1.text);
+    await p.click('#ltScope');
+    await p.waitForTimeout(300);
+    const l2 = await live();
+    ok('改朗读范围会播报', /朗读范围/.test(l2.text), l2.text);
+    await p.click('[data-action="listen-panel"][data-val="timer"]');
+    await p.waitForTimeout(200);
+    await p.click('[data-action="listen-timer"][data-val="30"]');
+    await p.waitForTimeout(300);
+    const l3 = await live();
+    ok('设定时会播报', /定时 30 分钟/.test(l3.text), l3.text);
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

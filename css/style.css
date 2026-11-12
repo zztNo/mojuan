@@ -1333,6 +1333,11 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .listen-play:hover { filter: brightness(1.08); }
 .listen-play .ic { width: 30px; height: 30px; }
 .listen-tools { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+/* 五个工具键在 390 宽以上正好一行；再窄就排成 3 + 2 两行整齐居中（原先会剩「范围 · 全书」孤零零一行） */
+.lt-break { display: none; }
+@media (max-width: 389px) {
+  .lt-break { display: block; flex: 0 0 100%; height: 0; margin: -4px 0; }
+}
 .listen-tools button {
   padding: 7px 13px; border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--link) 16%, transparent);

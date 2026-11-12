@@ -3659,8 +3659,22 @@
     if (state.listenPos) delete state.listenPos[listen.bookId]; /* 换章从头听 */
     save();
     renderListen();
+    /* renderListen 会把播报节点整个换掉，所以这句要放在它后面 */
+    const meta = chapterList(b)[target - 1] || {};
+    listenAnnounce('第 ' + target + ' 章' + (meta.title ? '，' + meta.title : ''));
     if (autoplay || listen.playing) listenSpeak(false);
     else listenRenderDynamic();
+  }
+  /* 听卷页自己的读屏播报。阅读器那个 #readerAnnounce 在听卷打开时整块是 inert 的，
+     念不出来——换章、改范围、设定时这些只弹 toast 的动作，读屏用户等于什么都没收到。 */
+  function listenAnnounce(text) {
+    if (!text) return;
+    const el = $('#listenAnnounce');
+    if (el) el.textContent = '';
+    setTimeout(() => {
+      const live = $('#listenAnnounce');
+      if (live && listen.active) live.textContent = text;
+    }, 30);
   }
   function listenShell(b) {
     const chs = chapterList(b);
@@ -3671,6 +3685,7 @@
         <div class="listen-top-title">听 卷 · ${esc(b.title)}</div>
         <button class="icon-btn" data-action="listen-minimize" title="收起，边听边读" aria-label="收起，边听边读">${icon('minimize')}</button>
       </div>
+      <div class="sr-announce" id="listenAnnounce" role="status" aria-live="polite" aria-atomic="true"></div>
       <div class="listen-main">
         <div class="listen-cover" id="listenCover">${coverHtml(b)}</div>
         <div class="listen-book">${esc(b.title)}</div>
@@ -3695,6 +3710,7 @@
           <button data-action="listen-panel" data-val="rate" id="ltRate">语速 ${fmtRate(listen.rate)}×</button>
           <button data-action="listen-panel" data-val="voice">音色</button>
           <button data-action="listen-panel" data-val="timer" id="ltTimer">定时</button>
+          <i class="lt-break" aria-hidden="true"></i>
           <button data-action="listen-panel" data-val="catalog">目录</button>
           <button data-action="listen-scope-toggle" id="ltScope" title="切换朗读范围">范围 · ${listen.scope === 'chapter' ? '本章' : '全书'}</button>
         </div>
@@ -4013,6 +4029,7 @@
     }
     listen.fadeOut = true;
     toast('定时到了，等这一句念完就收');
+    listenAnnounce('定时到了，这一句念完就停');
     listenRenderDynamic();
     /* 超长句兜底：15 秒后无论如何收尾，避免一直停不下来 */
     listenFadeTimer = setTimeout(() => { if (listen.active && listen.fadeOut) listenFinishFade(); }, 15000);
@@ -5530,6 +5547,7 @@
         listen.scope = next; state.listenScope = next; save();
         const btn = $('#ltScope');
         if (btn) btn.textContent = '范围 · ' + (next === 'chapter' ? '本章' : '全书');
+        listenAnnounce(next === 'chapter' ? '朗读范围：本章，读完即停' : '朗读范围：全书，本章读完接着下一章');
         toast(next === 'chapter' ? '只读本章 · 读完即停' : '从本章读到全书完');
         break;
       }
@@ -5610,6 +5628,7 @@
         } else { listen.timerAt = 0; }
         /* 到点由每秒巡检（listenTimerCheck）负责，这里只落一个时间戳 */
         listenPanel('timer'); listenRenderDynamic();
+        listenAnnounce(listen.timerMin ? '定时 ' + listen.timerMin + ' 分钟，到点等这一句念完再停' : '已取消定时');
         toast(listen.timerMin ? '将在 ' + listen.timerMin + ' 分钟后停止' : '已取消定时');
         break;
       }
