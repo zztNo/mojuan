@@ -480,6 +480,71 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- H5. 定时停止：到点收尾 / 后台睡过头也要认账 / 暂停不留 0 分幽灵 ---------- */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.addInitScript(seed, { progress: { shijing: { ch: 1, pct: 0, updated: 5 } } });
+    await p.addInitScript(TTS_MOCK);
+    /* 把时钟拨快的钩子：定时改成按 timerAt 巡检，这样才能在几秒内验到点 */
+    await p.addInitScript(() => {
+      const real = Date.now.bind(Date);
+      window.__off = 0;
+      Date.now = () => real() + (window.__off || 0);
+    });
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.waitForTimeout(500);
+    await p.click('[data-action="listen-panel"][data-val="timer"]');
+    await p.waitForTimeout(200);
+    await p.click('[data-action="listen-timer"][data-val="15"]');
+    await p.waitForTimeout(300);
+    const t0 = await p.evaluate(() => ({
+      btn: document.getElementById('ltTimer').textContent,
+      panel: (document.getElementById('ltTimerLeft') || {}).textContent || '',
+      pressed: (document.querySelector('[data-action="listen-timer"][data-val="15"]') || {}).getAttribute
+        ? document.querySelector('[data-action="listen-timer"][data-val="15"]').getAttribute('aria-pressed') : ''
+    }));
+    ok('选了 15 分钟，按钮上就写着 15分', t0.btn === '定时 15分', t0.btn);
+    ok('面板里给出还剩多久', /还剩 1[45]:\d\d/.test(t0.panel), t0.panel);
+    ok('选中的档位有 pressed 状态', t0.pressed === 'true', String(t0.pressed));
+    /* ① 时间到（模拟后台被冻结，醒来已经过了 16 分钟）：先标记收尾，不硬断在半句上 */
+    await p.evaluate(() => { window.__off = 16 * 60 * 1000; });
+    await p.waitForTimeout(1400);
+    const t1 = await p.evaluate(() => ({
+      label: document.getElementById('listenPlay').getAttribute('aria-label'),
+      btn: document.getElementById('ltTimer').textContent
+    }));
+    ok('到点先进入收尾，不当场拔电', t1.btn === '即将收卷' && t1.label === '暂停', JSON.stringify(t1));
+    /* 这一句念完 → 才真正停 */
+    await p.evaluate(() => { const u = window.__tts.__last; if (u && u.onend) u.onend(); });
+    await p.waitForTimeout(500);
+    const t2 = await p.evaluate(() => ({
+      label: document.getElementById('listenPlay').getAttribute('aria-label'),
+      btn: document.getElementById('ltTimer').textContent
+    }));
+    ok('这句念完就停，定时也归零', t2.label === '播放' && t2.btn === '定时', JSON.stringify(t2));
+    /* ② 暂停中的定时到点：不该留一个「定时 0 分」的幽灵按钮 */
+    await p.evaluate(() => { window.__off = 0; });
+    await p.click('[data-action="listen-panel"][data-val="timer"]');
+    await p.waitForTimeout(200);
+    await p.click('[data-action="listen-timer"][data-val="30"]');
+    await p.waitForTimeout(300);
+    await p.evaluate(() => { window.__off = 40 * 60 * 1000; }); /* 先暂停，再让时间走过去 */
+    await p.click('#listenPlay'); /* 这时是「播放」→ 点一下开念 */
+    await p.waitForTimeout(200);
+    await p.click('#listenPlay'); /* 再点一下暂停 */
+    await p.waitForTimeout(1400);
+    const t3 = await p.evaluate(() => ({
+      label: document.getElementById('listenPlay').getAttribute('aria-label'),
+      btn: document.getElementById('ltTimer').textContent
+    }));
+    ok('暂停中到点不留幽灵定时', t3.btn === '定时', t3.btn);
+    await p.close();
+  }
+
   /* ---------- H4. 发版后老页面提示更新（需要 http 环境才有 Service Worker） ---------- */
   {
     const http = require('http');

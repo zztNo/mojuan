@@ -3129,8 +3129,19 @@
     }
     const rate = $('#ltRate'); if (rate) rate.textContent = '语速 ' + fmtRate(listen.rate) + '×';
     const timer = $('#ltTimer');
-    if (timer) timer.textContent = listen.fadeOut ? '即将收卷'
-      : (listen.timerMin ? '定时 ' + Math.max(0, Math.ceil((listen.timerAt - Date.now()) / 60000)) + '分' : '定时');
+    if (timer) {
+      const left = listen.timerAt ? listen.timerAt - Date.now() : 0;
+      /* 剩不到一分钟就别再显示「定时 0 分」了，直接报秒，否则看着像坏了 */
+      timer.textContent = listen.fadeOut ? '即将收卷'
+        : (!listen.timerMin ? '定时'
+          : (left >= 60000 ? '定时 ' + Math.ceil(left / 60000) + '分'
+            : '定时 ' + Math.max(1, Math.ceil(left / 1000)) + '秒'));
+    }
+    const tLeft = $('#ltTimerLeft');
+    if (tLeft) {
+      const txt = listenTimerLeftText();
+      if (tLeft.textContent !== txt) tLeft.textContent = txt;
+    }
     const t = $('#ttsBtn'); if (t) t.classList.toggle('tts-on', listen.active);
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.playbackState = listen.playing ? 'playing' : 'paused'; } catch (e) { /* 忽略 */ }
@@ -3875,8 +3886,9 @@
         + group(g.zh.length ? '其它语言' : '音色', g.other)
         + (g.other.length && g.zh.length ? '<div class="lp-empty">文言文建议用中文音色；其它语言念中文会走音。</div>' : '');
     } else if (kind === 'timer') {
-      p.innerHTML = head('定时停止') + `<div class="rs-pills">${[[0, '不开启'], [15, '15 分钟'], [30, '30 分钟'], [60, '60 分钟'], [90, '90 分钟']].map(([m, l]) =>
-        `<button class="rs-pill ${listen.timerMin === m ? 'active' : ''}" data-action="listen-timer" data-val="${m}">${l}</button>`).join('')}</div>`;
+      p.innerHTML = head('定时停止') + `<div class="lp-empty" id="ltTimerLeft">${listenTimerLeftText()}</div>`
+        + `<div class="rs-pills">${[[0, '不开启'], [15, '15 分钟'], [30, '30 分钟'], [45, '45 分钟'], [60, '60 分钟'], [90, '90 分钟']].map(([m, l]) =>
+          `<button class="rs-pill ${listen.timerMin === m ? 'active' : ''}" data-action="listen-timer" data-val="${m}" aria-pressed="${listen.timerMin === m}">${l}</button>`).join('')}</div>`;
     } else {
       const b = getBook(listen.bookId);
       p.innerHTML = head('目录 · 共 ' + chapterList(b).length + ' 章') +
@@ -3979,6 +3991,32 @@
     else if (c.provider === 'openai') patch.openai = { base: g('vfBase') || 'https://api.openai.com/v1', key: g('vfKey'), model: g('vfModel') || 'tts-1', voice: g('vfVoice') || 'alloy' };
     v.setConfig(patch);
   }
+  /* 定时面板里那一行说明：每秒跟着走，别让「还剩 14:31」定在那儿不动 */
+  function listenTimerLeftText() {
+    if (!listen.timerMin) return '睡前听一段，到点会等这一句念完再停，不会硬断在半句上';
+    if (listen.fadeOut) return '正在收尾，这一句念完就停';
+    const left = Math.max(0, (listen.timerAt - Date.now()) / 1000);
+    return '还剩 ' + fmtTime(left) + '，到点会等这一句念完再停';
+  }
+  /* 定时到点。
+     原来是用一个 setTimeout 一次排满整段时长，两个隐患：手机切后台 / 锁屏时定时器会被
+     节流或冻结，到点早过了才醒；暂停时 fadeOut 被取消，定时却再也不会重新武装，
+     按钮就一直卡在「定时 0 分」。改成每秒巡检 timerAt，慢一秒但不会丢。 */
+  function listenTimerCheck() {
+    if (!listen.active || !listen.timerMin || !listen.timerAt || listen.fadeOut) return;
+    if (Date.now() < listen.timerAt) return;
+    if (!listen.playing) {
+      /* 早就暂停了，本来就没声可停：悄悄把定时清掉，别留一个 0 分的幽灵 */
+      listen.timerMin = 0; listen.timerAt = 0;
+      listenRenderDynamic();
+      return;
+    }
+    listen.fadeOut = true;
+    toast('定时到了，等这一句念完就收');
+    listenRenderDynamic();
+    /* 超长句兜底：15 秒后无论如何收尾，避免一直停不下来 */
+    listenFadeTimer = setTimeout(() => { if (listen.active && listen.fadeOut) listenFinishFade(); }, 15000);
+  }
   /* 定时到点不硬断：等当前这句自然念完再收尾；15 秒兜底防超长句卡住 */
   function listenFinishFade() {
     clearTimeout(listenFadeTimer); listenFadeTimer = null;
@@ -4067,6 +4105,7 @@
     clearInterval(listenTick);
     listenTick = setInterval(() => {
       if (!listen.active) return;
+      listenTimerCheck();
       listenRenderDynamic();
       /* 每秒顺带巡检：onend 丢了的句子在这里被捞回来 */
       listenWatchdog();
@@ -5564,17 +5603,12 @@
       case 'listen-timer': {
         listen.timerMin = Number(val);
         clearTimeout(listenTimer);
+        listen.fadeOut = false;
+        clearTimeout(listenFadeTimer); listenFadeTimer = null;
         if (listen.timerMin) {
           listen.timerAt = Date.now() + listen.timerMin * 60000;
-          listenTimer = setTimeout(() => {
-            if (!listen.active) return;
-            listen.fadeOut = true;
-            toast('定时到了，等这一句念完就收');
-            listenRenderDynamic();
-            /* 超长句兜底：15 秒后无论如何收尾，避免一直停不下来 */
-            listenFadeTimer = setTimeout(() => { if (listen.active && listen.fadeOut) listenFinishFade(); }, 15000);
-          }, listen.timerMin * 60000);
-        } else listen.timerAt = 0;
+        } else { listen.timerAt = 0; }
+        /* 到点由每秒巡检（listenTimerCheck）负责，这里只落一个时间戳 */
         listenPanel('timer'); listenRenderDynamic();
         toast(listen.timerMin ? '将在 ' + listen.timerMin + ' 分钟后停止' : '已取消定时');
         break;
