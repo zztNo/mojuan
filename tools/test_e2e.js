@@ -630,6 +630,42 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- M. 跨段划线：一次选中多段，逐段落库并高亮 ---------- */
+  {
+    const p = await newPage(browser, { settings: { pageMode: 'scroll', fs: 19, lh: 2 } }, errs);
+    await p.goto(FILE + '#/reader/chuci/1');
+    await p.waitForSelector('#readerPaper p[data-pi]', { timeout: 8000 });
+    await p.waitForTimeout(500);
+    const box = await p.evaluate(() => {
+      const ps = [...document.querySelectorAll('#readerPaper p[data-pi]')];
+      const r1 = ps[2].getBoundingClientRect(), r2 = ps[4].getBoundingClientRect();
+      return { x1: r1.left + 30, y1: r1.top + r1.height / 2, x2: r2.left + 60, y2: r2.top + r2.height / 2 };
+    });
+    await p.mouse.move(box.x1, box.y1);
+    await p.mouse.down();
+    await p.mouse.move(box.x2, box.y2, { steps: 12 });
+    await p.mouse.up();
+    await p.waitForTimeout(300);
+    const pop = await p.evaluate(() => {
+      const el = document.getElementById('hlPop');
+      return { hidden: el.hidden, label: (el.querySelector('[data-action="hl-save"]') || {}).textContent };
+    });
+    ok('跨段选中会弹工具条，并写明划几段', pop.hidden === false && /3 段/.test(pop.label || ''), JSON.stringify(pop));
+    await p.click('#hlPop [data-action="hl-save"]');
+    await p.waitForTimeout(400);
+    const saved = await p.evaluate(() => {
+      const st = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      const ann = (st.annotations || {}).chuci || [];
+      return {
+        n: ann.length, pis: ann.map((a) => a.pi),
+        marks: document.querySelectorAll('#readerPaper mark.hl-mark').length
+      };
+    });
+    ok('三段各记一条划线', saved.n === 3, JSON.stringify(saved));
+    ok('三段都画出高亮', saved.marks === 3, String(saved.marks));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

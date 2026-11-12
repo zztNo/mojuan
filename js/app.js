@@ -2737,23 +2737,52 @@
     const el = n && (n.nodeType === 3 ? n.parentElement : n);
     return el && el.closest ? el.closest('#readerPaper p[data-pi], #flipPage p[data-fi]') : null;
   };
+  /* 跨段选择：按段落切开，每段各取一段文字。
+     划线是按「章:段:原文」存的，只有逐段对齐才能画出连续的几条高亮。 */
+  function splitSelectionByPara(sel) {
+    const paper = $('#readerPaper');
+    if (!paper || !sel.rangeCount) return null;
+    const range = sel.getRangeAt(0);
+    const out = [];
+    Array.from(paper.querySelectorAll('p[data-pi], p[data-fi]')).forEach((el) => {
+      if (!range.intersectsNode(el)) return;
+      const pi = el.dataset.pi != null ? Number(el.dataset.pi) : Number(el.dataset.fi) - 2;
+      if (isNaN(pi) || pi < 0) return;
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      /* 把整段的范围钳到选区里：起点取两者较后的，终点取两者较前的 */
+      if (range.compareBoundaryPoints(Range.START_TO_START, r) > 0) r.setStart(range.startContainer, range.startOffset);
+      if (range.compareBoundaryPoints(Range.END_TO_END, r) < 0) r.setEnd(range.endContainer, range.endOffset);
+      const t = String(r).replace(/\s+/g, ' ').trim();
+      if (t) out.push({ pi, text: t });
+    });
+    return out.length ? out : null;
+  }
   function onReaderSelection() {
     if (!readerRoot.dataset.currentBook) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return;
     const text = String(sel).trim();
-    if (!text || text.length > 500) return;
+    if (!text) return;
     const para = hlParaOf(sel.anchorNode), endPara = hlParaOf(sel.focusNode);
     if (!para || !endPara) return;
-    /* 翻页会把长段拆成多块，跨块选中的文字在任一单块里都不完整、高亮会对不上，
-       所以只接受同一段落 DOM 内的选区 */
-    if (para !== endPara) { toast('一次只划一块内的文字'); return; }
-    const pi = para.dataset.pi != null ? Number(para.dataset.pi) : Number(para.dataset.fi) - 2;
-    if (isNaN(pi) || pi < 0) return;
+    const piOf = (el) => (el.dataset.pi != null ? Number(el.dataset.pi) : Number(el.dataset.fi) - 2);
     const b = getBook(readerRoot.dataset.currentBook); if (!b) return;
-    hlDraft = { bid: b.id, ch: Number(readerRoot.dataset.currentCh) || 1, pi, text };
+    /* 同一段内的选区直接过；跨段则逐段拆开。
+       翻页模式会把长段拆成多块，两块其实还是同一段（pi 相同），照旧当一段处理。 */
+    let parts = null;
+    if (para !== endPara && piOf(para) !== piOf(endPara)) {
+      parts = splitSelectionByPara(sel);
+      if (!parts || parts.length < 2) return;
+      if (parts.reduce((n, p) => n + p.text.length, 0) > 1200) { toast('选段太长了，分两次划吧'); return; }
+    } else if (text.length > 500) return;
+    const pi = piOf(para);
+    if (isNaN(pi) || pi < 0) return;
+    hlDraft = { bid: b.id, ch: Number(readerRoot.dataset.currentCh) || 1, pi, text: parts ? parts[0].text : text, parts };
     hideHlEdit();
     const pop = $('#hlPop'), note = $('#hlNote'); if (!pop) return;
+    const saveBtn = pop.querySelector('[data-action="hl-save"]');
+    if (saveBtn) saveBtn.textContent = parts ? '划线 · ' + parts.length + ' 段' : '划线';
     const r = sel.getRangeAt(0).getBoundingClientRect();
     const below = r.bottom + 120 < window.innerHeight;
     pop.dataset.below = below ? '1' : '0';
@@ -2767,13 +2796,23 @@
     const d = hlDraft;
     const list = state.annotations[d.bid] || (state.annotations[d.bid] = []);
     const col = ui.hlColor || 'red';
-    const dup = list.some((a) => a.ch === d.ch && a.pi === d.pi && a.text === d.text
-      && (a.note || '') === (note || '') && (a.color || 'red') === col);
-    if (!dup) { list.push({ ch: d.ch, pi: d.pi, text: d.text, note: note || '', color: col, time: Date.now() }); save(); }
-    refreshHlParas(d.bid, d.ch, d.pi);
+    /* 跨段时逐段落库；批注只挂第一段，免得同一条想法在笔记列表里出现三次 */
+    const items = d.parts && d.parts.length ? d.parts : [{ pi: d.pi, text: d.text }];
+    let added = 0;
+    items.forEach((it, i) => {
+      const nt = i === 0 ? (note || '') : '';
+      const dup = list.some((a) => a.ch === d.ch && a.pi === it.pi && a.text === it.text
+        && (a.note || '') === nt && (a.color || 'red') === col);
+      if (dup) return;
+      list.push({ ch: d.ch, pi: it.pi, text: it.text, note: nt, color: col, time: Date.now() });
+      added += 1;
+    });
+    if (added) save();
+    items.forEach((it) => refreshHlParas(d.bid, d.ch, it.pi));
     hideHlPop();
     try { window.getSelection().removeAllRanges(); } catch (e) { /* 忽略 */ }
-    toast(dup ? '这条已经记下了' : (note ? '批注已存' : '已划线'));
+    if (items.length > 1) toast(added ? '已划 ' + items.length + ' 段' : '这几段已经记下了');
+    else toast(added ? (note ? '批注已存' : '已划线') : '这条已经记下了');
   }
   function annotationHtml(b) {
     const list = annotationList(b.id);
