@@ -84,6 +84,36 @@ const toB64 = (hex) => Buffer.from(hex, 'hex').toString('base64');
   ok('2MB 内容识别未乱码', big.chs > 1, 'chs=' + big.chs);
   console.log(`  2MB GBK 实测 ${big.ms}ms（${big.mb}MB，${big.chs} 章）`);
 
+  /* 无扩展名纯文本：浏览器常给 type=''，不能把整个文件名当成扩展名拒收 */
+  const noExt = await p.evaluate(async () => {
+    const u8 = new TextEncoder().encode('第一章\n\n春眠不觉晓，处处闻啼鸟。\n');
+    try {
+      const out = await MJ.importer.parseFile(new File([u8], 'README', { type: '' }));
+      return { ok: true, chs: out.chapters.length, text: out.chapters.map((c) => c.paras.join('')).join('') };
+    } catch (e) { return { ok: false, msg: String(e.message).slice(0, 60) }; }
+  });
+  ok('无扩展名纯文本能导入', noExt.ok === true && noExt.text.indexOf('春眠不觉晓') >= 0,
+    JSON.stringify(noExt).slice(0, 100));
+
+  /* 开头 210KB 纯 ASCII（英文版权页）、后面才是 GBK 中文：
+     样本若停在文件开头，严格 UTF-8 必然通过，整本中文会变成替换符 */
+  const asciiHead = await p.evaluate(async (arg) => {
+    const bytes = [];
+    for (let i = 0; i < arg.hex.length; i += 2) bytes.push(parseInt(arg.hex.slice(i, i + 2), 16));
+    const head = new Uint8Array(300000).fill(0x41);
+    const all = new Uint8Array(head.length + 2 + bytes.length);
+    all.set(head, 0);
+    all.set([0x0a, 0x0a], head.length);
+    all.set(bytes, head.length + 2);
+    try {
+      const out = await MJ.importer.parseFile(new File([all], 'head.txt', { type: 'text/plain' }));
+      return { ok: true, text: out.chapters.map((c) => c.paras.join('')).join('') };
+    } catch (e) { return { ok: false, msg: String(e.message).slice(0, 60) }; }
+  }, { hex: CASES[0].hex });
+  ok('超长 ASCII 前缀后的 GBK 正文不乱码',
+    asciiHead.ok && asciiHead.text.indexOf('夜里下了雨') >= 0 && asciiHead.text.indexOf('\uFFFD') < 0,
+    JSON.stringify(asciiHead).slice(0, 100));
+
   ok('无 JS 报错', errs.length === 0, errs.join(' | '));
 
   console.log(`本地卷编码：${pass} PASS / ${fail} FAIL`);

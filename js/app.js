@@ -144,6 +144,12 @@
   }
   /* 连续取章失败时的冷却阶梯：断网时别让翻章 / 全书检索把书源打爆 */
   const CHAPTER_BACKOFF = [0, 3000, 8000, 18000, 30000];
+  /* 书源取不到正文时可能返回一句占位提示而不是抛错。这类字符串绝不能当成功
+     正文落库：否则冷却阶梯不触发、联网后也永不重取，用户会一直看着那句提示。 */
+  const CHAPTER_RETRYABLE_RE = /^（?(需要联网|这一章没取回来|这一章暂未取到|本章内容未能读取)/;
+  function isRetryablePlaceholder(paras) {
+    return !!(paras && paras.length === 1 && CHAPTER_RETRYABLE_RE.test(String(paras[0] || '').trim()));
+  }
   /* 正文按需取：内置书首次打开要加载整本分片，在线源逐章取回 */
   async function ensureChapter(b, no) {
     if (!b || b.local) return;
@@ -162,10 +168,20 @@
     const task = (async () => {
       try {
         const paras = await src.getChapter(b.id, no);
-        if (paras && paras.length) rec.chapters[no - 1] = { title: '', paras: paras };
+        if (isRetryablePlaceholder(paras)) {
+          /* 按失败记，走冷却阶梯：联网后或点「重新取回」才会再发一次请求 */
+          const attempts = Math.min(CHAPTER_BACKOFF.length - 1, ((prev && prev.attempts) || 0) + 1);
+          rec.chapters[no - 1] = {
+            title: '', paras: null, error: '章节未取回',
+            attempts, retryAt: Date.now() + CHAPTER_BACKOFF[attempts]
+          };
+        } else if (paras && paras.length) {
+          rec.chapters[no - 1] = { title: '', paras: paras };
+        }
         /* 在线源可能在这一步才拿到真实章节目录，回写到索引 */
         const meta = SRC.getBook(b.id);
-        if (meta && meta.chapters && meta.chapters.length <= 1 && paras && paras.length) {
+        if (meta && meta.chapters && meta.chapters.length <= 1 && paras && paras.length
+            && !isRetryablePlaceholder(paras)) {
           const fresh = await src.getBookMeta && await src.getBookMeta(b.id);
           if (fresh && fresh.chapters && fresh.chapters.length > 1) meta.chapters = fresh.chapters;
         }
@@ -1841,7 +1857,7 @@
   /* ---------- 阅读器 ---------- */
   /* 正文取不到时，书源返回的是一句提示而不是真章节。
      认出来单独渲染成「取不到 + 重试」，别让人对着括号里的一行字读。 */
-  const READER_ERR_RE = /^（?(需要联网|这一章暂未取到|这一章暂无|这卷没有|本章内容未能读取)/;
+  const READER_ERR_RE = /^（?(需要联网|这一章没取回来|这一章暂未取到|这一章暂无|这卷没有|本章内容未能读取)/;
   function chapterErrMsg(b, ch) {
     const ps = paragraphs(b, ch - 1);
     if (ps.length !== 1) return '';
@@ -2644,7 +2660,14 @@
     });
     const nm = $('#noteNoMatch'); if (nm) nm.hidden = shown > 0;
     const clr = $('.shelf-search-clear'); if (clr) clr.hidden = !ui.noteSearch;
-    if (ui.noteMulti) syncNotePickBar();
+    if (ui.noteMulti) {
+      /* 筛掉的条目要从勾选集合里去掉：否则「已选 N 条」包含看不见的笔记，
+         点删除会把它们一起删掉，属于静默数据丢失。 */
+      const visible = new Set();
+      $$('[data-note-item]').forEach((el) => { if (!el.hidden) visible.add(el.dataset.noteKey); });
+      ui.notePicked.forEach((k) => { if (!visible.has(k)) ui.notePicked.delete(k); });
+      syncNotePickBar();
+    }
   }
   /* 批量整理：勾选状态直接改 DOM，不整页重渲染，输入框焦点和滚动位置都不动 */
   function noteKeyOf(bid, idx) { return bid + ':' + idx; }
@@ -3391,7 +3414,9 @@
       cur.onsuccess = (ev) => {
         const c = ev.target.result;
         if (!c) {
-          try { db.close(); } catch (_) {}
+          /* 这里拿的是 openAudioDB() 缓存的共享连接，绝不能 close：关掉之后
+             所有 audioIDB 的 transaction 都会抛 InvalidStateError 并被静默吞掉，
+             第 20 句起缓存全废，同一句反复重新合成（重复计费）。 */
           if (total <= max || !rows.length) return;
           const drop = Math.max(1, Math.ceil(rows.length * 0.25));
           rows.sort((a, b) => a.ts - b.ts).slice(0, drop)

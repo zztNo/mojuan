@@ -44,10 +44,14 @@
     const u8 = new Uint8Array(buf);
     if (u8.length <= 262144) return buf;
     /* 跳过开头一长串 ASCII（英文目录、版权声明），否则这一段对中文编码没有区分力 */
-    let pre = 0;
-    for (let i = 0, n = Math.min(u8.length, 200000); i < n; i++) {
-      if (u8[i] > 0x7F) { pre = Math.max(0, i - 16) & ~1; break; }
+    let pre = 0, found = false;
+    /* 扫整本找第一个高位字节，别只看开头 200KB：英文版权页/目录更长时，
+       样本会停在纯 ASCII 上，严格 UTF-8 必然通过、候选打分也没有区分力，
+       后面的 GBK 正文会被整本按 UTF-8 解码成替换符。 */
+    for (let i = 0, n = u8.length; i < n; i++) {
+      if (u8[i] > 0x7F) { pre = Math.max(0, i - 16) & ~1; found = true; break; }
     }
+    if (!found) pre = Math.max(0, u8.length - 131072) & ~1;
     return buf.slice(pre, Math.min(buf.byteLength, pre + 131072));
   }
 
@@ -290,7 +294,10 @@
 
   async function parseFile(file) {
     const name = file.name || '本地书';
-    const ext = (name.split('.').pop() || '').toLowerCase();
+    /* 没有扩展名时 split('.') 会把整个文件名当成 ext，下面的 !ext 兜底就永远
+       不生效；浏览器对无后缀纯文本常给 type=''，那样会被误判成「不支持格式」。 */
+    const dot = name.lastIndexOf('.');
+    const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
     const baseName = clean(name.replace(/\.[^.]+$/, '')) || '本地书';
     if (ext === 'epub') {
       const r = await parseEpub(file);

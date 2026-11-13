@@ -1070,6 +1070,40 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- T. 笔记多选：筛选后不能连隐藏的一起删 ---------- */
+  {
+    const p = await newPage(browser, {
+      annotations: {
+        shijing: [
+          { ch: 1, pi: 0, text: '春风又绿江南岸', color: 'red', note: '', time: 1 },
+          { ch: 1, pi: 1, text: '明月何时照我还', color: 'red', note: '', time: 2 }
+        ]
+      }
+    }, errs);
+    p.on('dialog', (d) => d.accept());
+    await p.goto(FILE + '#/me');
+    await p.waitForSelector('[data-note-item]', { timeout: 8000 });
+    await p.click('[data-action="toggle-note-multi"]');
+    await p.waitForSelector('#notePickAll', { timeout: 8000 });
+    await p.click('#notePickAll');
+    await p.waitForTimeout(180);
+    const all = await p.evaluate(() => (document.getElementById('notePickCount') || {}).textContent || '');
+    ok('T 前置：全选了 2 条', /2 条/.test(all), all);
+    await p.fill('#noteSearch', '春风');
+    await p.waitForTimeout(400);
+    const picked = await p.evaluate(() => (document.getElementById('notePickCount') || {}).textContent || '');
+    ok('筛选后勾选集合收敛到可见项', /1 条/.test(picked), picked);
+    await p.click('[data-action="note-bulk-del"]');
+    await p.waitForTimeout(320);
+    const left = await p.evaluate(() => {
+      const st = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      return (st.annotations.shijing || []).map((a) => a.text);
+    });
+    ok('删除只删可见笔记，隐藏的还在',
+      left.length === 1 && left[0].indexOf('明月') >= 0, JSON.stringify(left));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {
