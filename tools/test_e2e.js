@@ -497,17 +497,17 @@ const TTS_MOCK = () => {
     await p.click('#ttsBtn');
     await p.waitForSelector('#listen', { timeout: 8000 });
     await p.waitForTimeout(500);
-    await p.click('[data-action="listen-panel"][data-val="timer"]');
+    await p.click('[data-action="listen-panel"][data-val="where"]');
     await p.waitForTimeout(200);
     await p.click('[data-action="listen-timer"][data-val="15"]');
     await p.waitForTimeout(300);
     const t0 = await p.evaluate(() => ({
-      btn: document.getElementById('ltTimer').textContent,
+      btn: document.getElementById('ltWhere').textContent,
       panel: (document.getElementById('ltTimerLeft') || {}).textContent || '',
       pressed: (document.querySelector('[data-action="listen-timer"][data-val="15"]') || {}).getAttribute
         ? document.querySelector('[data-action="listen-timer"][data-val="15"]').getAttribute('aria-pressed') : ''
     }));
-    ok('选了 15 分钟，按钮上就写着 15分', t0.btn === '定时 15分', t0.btn);
+    ok('选了 15 分钟，按钮上就写着 15分', t0.btn === '听到哪 · 15分', t0.btn);
     ok('面板里给出还剩多久', /还剩 1[45]:\d\d/.test(t0.panel), t0.panel);
     ok('选中的档位有 pressed 状态', t0.pressed === 'true', String(t0.pressed));
     /* ① 时间到（模拟后台被冻结，醒来已经过了 16 分钟）：先标记收尾，不硬断在半句上 */
@@ -515,7 +515,7 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(1400);
     const t1 = await p.evaluate(() => ({
       label: document.getElementById('listenPlay').getAttribute('aria-label'),
-      btn: document.getElementById('ltTimer').textContent
+      btn: document.getElementById('ltWhere').textContent
     }));
     ok('到点先进入收尾，不当场拔电', t1.btn === '即将收卷' && t1.label === '暂停', JSON.stringify(t1));
     /* 这一句念完 → 才真正停 */
@@ -523,12 +523,12 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(500);
     const t2 = await p.evaluate(() => ({
       label: document.getElementById('listenPlay').getAttribute('aria-label'),
-      btn: document.getElementById('ltTimer').textContent
+      btn: document.getElementById('ltWhere').textContent
     }));
-    ok('这句念完就停，定时也归零', t2.label === '播放' && t2.btn === '定时', JSON.stringify(t2));
+    ok('这句念完就停，定时也归零', t2.label === '播放' && t2.btn === '听到哪 · 全书', JSON.stringify(t2));
     /* ② 暂停中的定时到点：不该留一个「定时 0 分」的幽灵按钮 */
     await p.evaluate(() => { window.__off = 0; });
-    await p.click('[data-action="listen-panel"][data-val="timer"]');
+    await p.click('[data-action="listen-panel"][data-val="where"]');
     await p.waitForTimeout(200);
     await p.click('[data-action="listen-timer"][data-val="30"]');
     await p.waitForTimeout(300);
@@ -539,9 +539,9 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(1400);
     const t3 = await p.evaluate(() => ({
       label: document.getElementById('listenPlay').getAttribute('aria-label'),
-      btn: document.getElementById('ltTimer').textContent
+      btn: document.getElementById('ltWhere').textContent
     }));
-    ok('暂停中到点不留幽灵定时', t3.btn === '定时', t3.btn);
+    ok('暂停中到点不留幽灵定时（键还原成范围）', t3.btn === '听到哪 · 全书', t3.btn);
     await p.close();
   }
 
@@ -766,7 +766,7 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
-  /* ---------- O. 窄屏听卷工具条：五个键排成 3 + 2，别剩「范围」孤零零一行 ---------- */
+  /* ---------- O. 窄屏听卷工具条：收成四键后 340+ 一行，极窄机型 2 + 2 兜底 ---------- */
   {
     const rowsAt = async (w) => {
       const p = await newPage(browser, { shelf: ['shijing'] }, errs);
@@ -790,9 +790,11 @@ const TTS_MOCK = () => {
       return JSON.stringify(r);
     };
     const narrow = await rowsAt(360);
-    ok('360 宽：工具键排成 3 + 2', narrow === '[3,2]', narrow);
+    ok('360 宽：四个工具键排成一行', narrow === '[4]', narrow);
     const wide = await rowsAt(430);
-    ok('430 宽：工具键仍是一行', wide === '[5]', wide);
+    ok('430 宽：四个工具键仍是一行', wide === '[4]', wide);
+    const tiny = await rowsAt(320);
+    ok('320 宽：极窄机型折成 2 + 2', tiny === '[2,2]', tiny);
   }
 
   /* ---------- P. 听卷读屏：换章 / 改范围 / 设定时都要念出来（阅读器那个 live 区是 inert 的） ---------- */
@@ -814,12 +816,22 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(800);
     const l1 = await live();
     ok('换章会播报新章名', /第 2 章/.test(l1.text) && /葛覃/.test(l1.text), l1.text);
-    await p.click('#ltScope');
+    await p.click('[data-action="listen-panel"][data-val="where"]');
+    await p.waitForTimeout(200);
+    const wherePanel = await p.evaluate(() => ({
+      groups: [...document.querySelectorAll('#listenPanel .lp-group')].map((e) => e.textContent),
+      scope: document.getElementById('ltWhere').textContent
+    }));
+    ok('「听到哪儿」把范围和定时收在一页', wherePanel.groups.join('|') === '朗读范围|定时停止', JSON.stringify(wherePanel));
+    await p.click('[data-action="listen-scope"][data-val="chapter"]');
     await p.waitForTimeout(300);
     const l2 = await live();
     ok('改朗读范围会播报', /朗读范围/.test(l2.text), l2.text);
-    await p.click('[data-action="listen-panel"][data-val="timer"]');
-    await p.waitForTimeout(200);
+    const scopeState = await p.evaluate(() => ({
+      pressed: document.querySelector('[data-action="listen-scope"][data-val="chapter"]').getAttribute('aria-pressed'),
+      where: document.getElementById('ltWhere').textContent
+    }));
+    ok('范围选中态与底栏键同步', scopeState.pressed === 'true' && scopeState.where === '听到哪 · 本章', JSON.stringify(scopeState));
     await p.click('[data-action="listen-timer"][data-val="30"]');
     await p.waitForTimeout(300);
     const l3 = await live();

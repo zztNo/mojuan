@@ -1333,9 +1333,9 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .listen-play:hover { filter: brightness(1.08); }
 .listen-play .ic { width: 30px; height: 30px; }
 .listen-tools { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
-/* 五个工具键在 390 宽以上正好一行；再窄就排成 3 + 2 两行整齐居中（原先会剩「范围 · 全书」孤零零一行） */
+/* 四个工具键在 340 宽以上正好一行；更窄的机型强制 2 + 2 居中，免得 flex 自己折成 3 + 1 */
 .lt-break { display: none; }
-@media (max-width: 389px) {
+@media (max-width: 339px) {
   .lt-break { display: block; flex: 0 0 100%; height: 0; margin: -4px 0; }
 }
 .listen-tools button {
@@ -1356,6 +1356,10 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .lp-head .icon-btn { width: 26px; height: 26px; }
 /* 定时是六档，横排会剩一个孤零零的「90 分钟」；三列两行更整齐，热区也更大 */
 .listen-panel .rs-pills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* 范围只有两档，别跟着定时用三列、留一个空格；副标说明「念完会怎样」，比原来一键切换好懂 */
+.listen-panel .rs-pills.lp-where-scope { grid-template-columns: repeat(2, 1fr); }
+.lp-where-scope .rs-pill small { display: block; margin-top: 2px; font-size: 10px; line-height: 1.4; color: var(--lsub); }
+.lp-where-scope .rs-pill.active small { color: var(--cinnabar); }
 .listen-panel .rs-pill {
   border-color: color-mix(in srgb, var(--link) 18%, transparent);
   color: var(--link); text-align: center;

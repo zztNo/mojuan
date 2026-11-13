@@ -12,6 +12,7 @@ tools/cache/
 
 # 测试运行产生的临时产物
 .playwright-cli/
+.tmp/
 
 # 依赖
 node_modules/

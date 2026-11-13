@@ -3128,14 +3128,17 @@
       if (chEl.textContent !== text) chEl.textContent = text;
     }
     const rate = $('#ltRate'); if (rate) rate.textContent = '语速 ' + fmtRate(listen.rate) + '×';
-    const timer = $('#ltTimer');
-    if (timer) {
+    /* 一个键同时背「范围」和「定时」两件事：有定时就把更紧急的倒计时顶上去，
+       没定时显示范围；剩不到一分钟直接报秒，免得挂着一个「0 分」像坏了。 */
+    const where = $('#ltWhere');
+    if (where) {
       const left = listen.timerAt ? listen.timerAt - Date.now() : 0;
-      /* 剩不到一分钟就别再显示「定时 0 分」了，直接报秒，否则看着像坏了 */
-      timer.textContent = listen.fadeOut ? '即将收卷'
-        : (!listen.timerMin ? '定时'
-          : (left >= 60000 ? '定时 ' + Math.ceil(left / 60000) + '分'
-            : '定时 ' + Math.max(1, Math.ceil(left / 1000)) + '秒'));
+      where.textContent = listen.fadeOut ? '即将收卷'
+        : (!listen.timerMin ? '听到哪 · ' + (listen.scope === 'chapter' ? '本章' : '全书')
+          : (left >= 60000 ? '听到哪 · ' + Math.ceil(left / 60000) + '分'
+            : '听到哪 · ' + Math.max(1, Math.ceil(left / 1000)) + '秒'));
+      where.setAttribute('aria-label', '朗读范围 ' + (listen.scope === 'chapter' ? '本章，念完即停' : '全书，接着念下一章')
+        + (listen.timerMin ? '；定时 ' + listen.timerMin + ' 分钟' : '；未设定时') + '，点开可修改');
     }
     const tLeft = $('#ltTimerLeft');
     if (tLeft) {
@@ -3709,10 +3712,9 @@
         <div class="listen-tools">
           <button data-action="listen-panel" data-val="rate" id="ltRate">语速 ${fmtRate(listen.rate)}×</button>
           <button data-action="listen-panel" data-val="voice">音色</button>
-          <button data-action="listen-panel" data-val="timer" id="ltTimer">定时</button>
           <i class="lt-break" aria-hidden="true"></i>
+          <button data-action="listen-panel" data-val="where" id="ltWhere" title="朗读范围与定时停止">听到哪 · ${listen.scope === 'chapter' ? '本章' : '全书'}</button>
           <button data-action="listen-panel" data-val="catalog">目录</button>
-          <button data-action="listen-scope-toggle" id="ltScope" title="切换朗读范围">范围 · ${listen.scope === 'chapter' ? '本章' : '全书'}</button>
         </div>
         <div id="listenPanel" class="listen-panel" hidden></div>
       </div>
@@ -3901,10 +3903,18 @@
         + group('中文音色', g.zh)
         + group(g.zh.length ? '其它语言' : '音色', g.other)
         + (g.other.length && g.zh.length ? '<div class="lp-empty">文言文建议用中文音色；其它语言念中文会走音。</div>' : '');
-    } else if (kind === 'timer') {
-      p.innerHTML = head('定时停止') + `<div class="lp-empty" id="ltTimerLeft">${listenTimerLeftText()}</div>`
-        + `<div class="rs-pills">${[[0, '不开启'], [15, '15 分钟'], [30, '30 分钟'], [45, '45 分钟'], [60, '60 分钟'], [90, '90 分钟']].map(([m, l]) =>
-          `<button class="rs-pill ${listen.timerMin === m ? 'active' : ''}" data-action="listen-timer" data-val="${m}" aria-pressed="${listen.timerMin === m}">${l}</button>`).join('')}</div>`;
+    } else if (kind === 'where') {
+      /* 「范围」和「定时」其实都在回答「听到哪儿停」：一个管念到哪一章收，一个管念到几点收。
+         以前一个是一键切换、一个藏在面板里，两处找、两套操作。合成一页，各自带上说明。 */
+      const scopePills = [['chapter', '本章', '念完这一章就停'], ['book', '全书', '接着念下一章']].map(([k, l, tip]) =>
+        `<button class="rs-pill ${listen.scope === k ? 'active' : ''}" data-action="listen-scope" data-val="${k}" aria-pressed="${listen.scope === k}">${l}<small>${tip}</small></button>`).join('');
+      const timerPills = [[0, '不开启'], [15, '15 分钟'], [30, '30 分钟'], [45, '45 分钟'], [60, '60 分钟'], [90, '90 分钟']].map(([m, l]) =>
+        `<button class="rs-pill ${listen.timerMin === m ? 'active' : ''}" data-action="listen-timer" data-val="${m}" aria-pressed="${listen.timerMin === m}">${l}</button>`).join('');
+      p.innerHTML = head('听到哪儿')
+        + '<div class="lp-group">朗读范围</div><div class="rs-pills lp-where-scope">' + scopePills + '</div>'
+        + '<div class="lp-group">定时停止</div>'
+        + `<div class="lp-empty" id="ltTimerLeft">${listenTimerLeftText()}</div>`
+        + '<div class="rs-pills">' + timerPills + '</div>';
     } else {
       const b = getBook(listen.bookId);
       p.innerHTML = head('目录 · 共 ' + chapterList(b).length + ' 章') +
@@ -4007,7 +4017,7 @@
     else if (c.provider === 'openai') patch.openai = { base: g('vfBase') || 'https://api.openai.com/v1', key: g('vfKey'), model: g('vfModel') || 'tts-1', voice: g('vfVoice') || 'alloy' };
     v.setConfig(patch);
   }
-  /* 定时面板里那一行说明：每秒跟着走，别让「还剩 14:31」定在那儿不动 */
+  /* 「听到哪儿」面板里那一行说明：每秒跟着走，别让「还剩 14:31」定在那儿不动 */
   function listenTimerLeftText() {
     if (!listen.timerMin) return '睡前听一段，到点会等这一句念完再停，不会硬断在半句上';
     if (listen.fadeOut) return '正在收尾，这一句念完就停';
@@ -4048,8 +4058,8 @@
     listen.playing = false;
     listenReleaseWakeLock();
     listenCommitProgress();
+    /* timerMin / fadeOut 都已归零，这一句刷新会把底栏键从「即将收卷」还原成范围文案 */
     listenRenderDynamic();
-    const lt = $('#ltTimer'); if (lt) lt.textContent = '定时';
     toast('定时结束，听卷已收');
   }
   function listenStopAll() {
@@ -5542,11 +5552,13 @@
         break;
       }
       case 'listen-panel': listenPanel(val); break;
-      case 'listen-scope-toggle': {
-        const next = listen.scope === 'chapter' ? 'book' : 'chapter';
+      case 'listen-scope': {
+        const next = (val === 'chapter' || val === 'book') ? val
+          : (listen.scope === 'chapter' ? 'book' : 'chapter');
         listen.scope = next; state.listenScope = next; save();
-        const btn = $('#ltScope');
-        if (btn) btn.textContent = '范围 · ' + (next === 'chapter' ? '本章' : '全书');
+        const p = $('#listenPanel');
+        if (p && !p.hidden && p.dataset.kind === 'where') listenPanel('where');
+        listenRenderDynamic();
         listenAnnounce(next === 'chapter' ? '朗读范围：本章，读完即停' : '朗读范围：全书，本章读完接着下一章');
         toast(next === 'chapter' ? '只读本章 · 读完即停' : '从本章读到全书完');
         break;
@@ -5627,7 +5639,7 @@
           listen.timerAt = Date.now() + listen.timerMin * 60000;
         } else { listen.timerAt = 0; }
         /* 到点由每秒巡检（listenTimerCheck）负责，这里只落一个时间戳 */
-        listenPanel('timer'); listenRenderDynamic();
+        listenPanel('where'); listenRenderDynamic();
         listenAnnounce(listen.timerMin ? '定时 ' + listen.timerMin + ' 分钟，到点等这一句念完再停' : '已取消定时');
         toast(listen.timerMin ? '将在 ' + listen.timerMin + ' 分钟后停止' : '已取消定时');
         break;
