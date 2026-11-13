@@ -1034,6 +1034,42 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- S. 卷签跨阅读模式：不能熄灭，也不能重复添加 ---------- */
+  {
+    const p = await newPage(browser, {
+      settings: { pageMode: 'flip', flipAnim: 'none', fs: 26, lh: 2.8 }
+    }, errs);
+    await p.setViewportSize({ width: 430, height: 620 });
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    await p.waitForTimeout(200);
+    const box = await p.locator('#readerBody').boundingBox();
+    await p.mouse.click(box.x + box.width * 0.86, box.y + box.height * 0.4);
+    await p.waitForTimeout(350);
+    const pageNo = await p.evaluate(() => Number((document.querySelector('#flipFoot b') || {}).textContent || 0));
+    ok('S 前置：确实翻到了第 2 页', pageNo >= 2, String(pageNo));
+    await p.click('#bmBtn');
+    await p.waitForTimeout(180);
+    const readMarks = () => p.evaluate(() =>
+      (JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}').bookmarks || {}).shijing || []);
+    const b1 = await readMarks();
+    ok('S 前置：卷签记下了非首页页码', b1.length === 1 && b1[0].page > 0, JSON.stringify(b1));
+
+    await p.click('[data-action="reader-settings"]');
+    await p.waitForSelector('[data-action="set-pagemode"][data-val="scroll"]', { timeout: 8000 });
+    await p.click('[data-action="set-pagemode"][data-val="scroll"]');
+    await p.waitForTimeout(400);
+    const on = await p.evaluate(() =>
+      !!document.getElementById('bmBtn') && document.getElementById('bmBtn').classList.contains('bm-on'));
+    ok('切到上下滚动后星标仍然亮着', on, String(on));
+
+    await p.click('#bmBtn');
+    await p.waitForTimeout(220);
+    const b2 = await readMarks();
+    ok('再点星标是移除而不是新增重复卷签', b2.length === 0, JSON.stringify(b2));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

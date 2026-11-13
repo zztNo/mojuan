@@ -2910,9 +2910,19 @@
       page: state.settings.pageMode === 'flip' ? flipState.page : 0
     };
   }
+  /* 章号才是卷签的身份。页码只在翻页模式有意义：滚动模式恒为 0，
+     字号或窗口一变又会重排。先按 (章, 页) 精确找，找不到就退回同章，
+     否则切一次阅读模式星标就熄灭，再点还会添一条重复的卷签。 */
+  function bookmarkIndex(list, k) {
+    let i = list.findIndex((m) => m.ch === k.ch && (m.page || 0) === k.page);
+    if (i < 0) i = list.findIndex((m) => m.ch === k.ch);
+    return i;
+  }
   function currentBookmark() {
     const k = bookKey();
-    return bookmarkList(k.id).find((m) => m.ch === k.ch && (m.page || 0) === k.page);
+    const list = bookmarkList(k.id);
+    const i = bookmarkIndex(list, k);
+    return i >= 0 ? list[i] : null;
   }
   function syncBookmarkBtn() {
     const el = $('#bmBtn'); if (el) el.classList.toggle('bm-on', !!currentBookmark());
@@ -2920,7 +2930,7 @@
   function toggleBookmark() {
     const k = bookKey(); if (!k.id) return;
     const list = bookmarkList(k.id).slice();
-    const idx = list.findIndex((m) => m.ch === k.ch && (m.page || 0) === k.page);
+    const idx = bookmarkIndex(list, k);
     if (idx >= 0) { list.splice(idx, 1); toast('已移除卷签'); }
     else {
       const b = getBook(k.id);
