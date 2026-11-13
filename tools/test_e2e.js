@@ -922,6 +922,118 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- R. 进度与状态一致性 ---------- */
+  /* R1 滚动模式换章：旧章的滚动读数不能把刚写好的新章进度覆盖回去 */
+  {
+    const p = await newPage(browser, { settings: { pageMode: 'scroll' } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerBody', { timeout: 8000 });
+    await p.waitForTimeout(300);
+    await p.evaluate(() => {
+      const b = document.getElementById('readerBody');
+      b.scrollTop = (b.scrollHeight - b.clientHeight) * 0.7;
+      b.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await p.waitForTimeout(250);
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForSelector('[data-action="catalog-goto"][data-ch="2"]', { timeout: 8000 });
+    await p.click('[data-action="catalog-goto"][data-ch="2"]');
+    await p.waitForTimeout(350);
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForSelector('.cat-resume', { timeout: 8000 });
+    const resume = await p.evaluate(() => (document.querySelector('.cat-resume') || {}).textContent || '');
+    ok('滚动模式换章后进度没被旧章读数覆盖', /第\s*2\s*章/.test(resume), resume);
+    await p.close();
+  }
+
+  /* R2 目录「继续读」要保留章内进度，不能弹回章首
+     （用滚动模式：诗经首章在翻页模式下只有一页，pct 本来就是 0，测不出差别） */
+  {
+    const p = await newPage(browser, {
+      settings: { pageMode: 'scroll' },
+      progress: { shijing: { ch: 1, pct: 0.6, updated: 1 } }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerBody', { timeout: 8000 });
+    await p.waitForTimeout(400);
+    const readPct = () => p.evaluate(() => {
+      const st = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      return (st.progress.shijing || {}).pct;
+    });
+    const before = await readPct();
+    ok('R2 前置：章内确实有进度', Number(before) > 0.1, String(before));
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForSelector('.cat-resume', { timeout: 8000 });
+    await p.click('.cat-resume');
+    await p.waitForTimeout(400);
+    const after = await readPct();
+    ok('目录「继续读」保留章内进度', Number(after) > 0.1, String(after));
+    await p.close();
+  }
+
+  /* R3 封面写失败一次，冷却过后要自动再试，不能永远丢在内存里 */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.addInitScript(() => {
+      const real = Date.now.bind(Date);
+      window.__off = 0;
+      Date.now = () => real() + (window.__off || 0);
+      localStorage.setItem('mojuan.state.v1', JSON.stringify({
+        v: 5, shelf: ['shijing'], settings: { pageMode: 'scroll' },
+        progress: { shijing: { ch: 1, pct: 0, updated: 1 } }
+      }));
+      const rawSet = Storage.prototype.setItem;
+      window.__coverWrites = 0;
+      let failOnce = true;
+      Storage.prototype.setItem = function (k, v) {
+        if (k === 'mojuan.covers.v1') {
+          window.__coverWrites += 1;
+          if (failOnce) { failOnce = false; const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e; }
+        }
+        return rawSet.call(this, k, v);
+      };
+    });
+    await p.goto(FILE + '#/book/shijing');
+    await p.waitForSelector('[data-action="open-cover"]', { timeout: 8000 });
+    await p.click('[data-action="open-cover"]');
+    await p.waitForSelector('[data-action="cover-save"]', { timeout: 8000 });
+    await p.click('[data-action="cover-save"]');
+    await p.waitForTimeout(250);
+    await p.evaluate(() => { window.__off = 31000; });
+    await p.evaluate(() => { window.dispatchEvent(new Event('pagehide')); });
+    await p.waitForTimeout(250);
+    const r = await p.evaluate(() => ({
+      writes: window.__coverWrites, has: !!localStorage.getItem('mojuan.covers.v1')
+    }));
+    ok('封面写失败冷却后会自动再试', r.writes >= 2 && r.has, JSON.stringify(r));
+    await p.close();
+  }
+
+  /* R4 批量重置读墨进度，要连听卷续听位置一起清 */
+  {
+    const p = await newPage(browser, {
+      listenPos: { shijing: { ch: 2, sentIndex: 5, charIndex: 120 } }
+    }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForSelector('[data-shelf-card]', { timeout: 8000 });
+    await p.evaluate(() => {
+      const b = document.createElement('button');
+      b.dataset.action = 'shelf-menu-manage'; b.dataset.id = 'shijing';
+      document.body.appendChild(b); b.click(); b.remove();
+    });
+    await p.waitForTimeout(250);
+    await p.evaluate(() => {
+      const b = document.createElement('button');
+      b.dataset.action = 'bulk-reset-progress';
+      document.body.appendChild(b); b.click(); b.remove();
+    });
+    await p.waitForTimeout(250);
+    const st = await p.evaluate(() => JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}'));
+    ok('批量重置进度会清掉听卷续听位置', !st.listenPos || !st.listenPos.shijing, JSON.stringify(st.listenPos));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {

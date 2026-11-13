@@ -318,6 +318,7 @@
       delete contentCache[x];
       const oi = cacheOrder.indexOf(x); if (oi >= 0) cacheOrder.splice(oi, 1);
       delete state.progress[x];
+      delete state.listenPos[x];
       delete state.covers[x]; markCoversDirty();
       delete state.bookmarks[x];
       delete state.annotations[x];
@@ -504,13 +505,15 @@
       warnSave('本地存储已满，这次改动没能保存；可到「墨斋 · 卷档管理」导出备份并清理封面图');
     }
     if (coversDirty && Date.now() >= coverRetryAt) {
-      try { localStorage.setItem(COVERS_KEY, JSON.stringify(state.covers || {})); }
-      catch (e) {
+      try {
+        localStorage.setItem(COVERS_KEY, JSON.stringify(state.covers || {}));
+        coversDirty = false;
+      } catch (e) {
         coverOK = false; coverRetryAt = Date.now() + 30000;
         warnSave('封面图没能存下（本机空间不足），进度、笔记与设置不受影响');
       }
-      /* 成败都不留着反复重试：下次改动封面会重新标记，或冷却过后自动再试 */
-      coversDirty = false;
+      /* 失败必须留着标记：靠 coverRetryAt 节流，冷却过后的下一次存档自动补写。
+         早先无条件清掉，结果内存里是新封面、磁盘上永远旧值，重启就丢。 */
     }
     return mainOK && coverOK;
   }
@@ -4805,6 +4808,10 @@
     ch = Math.max(1, Math.min(chapterList(b).length, ch));
     state.progress[id] = { ch, pct: pct || 0, updated: Date.now() };
     state.lastRead = id; save();
+    /* 新进度已写好，而 showReader 里还会结算一次滚动读数：那份读数属于换章前的
+       旧章，同书换章时它的节点/书 id 校验全过得去，会把刚写的新章进度覆盖回旧章。
+       这里先作废，让那次结算变成空操作；直接改路由进 showReader 的路径仍会正常结算。 */
+    ui.scrollProbe = null;
     history.replaceState(null, '', '#/reader/' + id + '/' + ch);
     showReader(id, ch);
     closePanel();
@@ -5376,7 +5383,11 @@
         rerender(); break;
       }
       case 'bulk-reset-progress': {
-        ui.selected.forEach((x) => { state.progress[x] = { ch: 1, pct: 0, updated: Date.now() }; });
+        ui.selected.forEach((x) => {
+          state.progress[x] = { ch: 1, pct: 0, updated: Date.now() };
+          /* 续听位置是另一套状态，留着的话进度归零了、听卷却还跳回旧章旧句 */
+          delete state.listenPos[x];
+        });
         save(); toast('已重置读墨进度'); rerender(); break;
       }
       case 'bulk-cover-motif': case 'bulk-cover-color': {
@@ -5605,7 +5616,14 @@
       }
       case 'flip-prev': flipBy(-1); break;
       case 'flip-next': flipBy(1); break;
-      case 'catalog-goto': switchChapter(readerRoot.dataset.currentBook, ch); break;
+      case 'catalog-goto': {
+        /* 「继续读」指向当前章时要把章内进度一起带上，否则 switchChapter 的
+           pct || 0 会把人弹回章首；点别的章则从第 0 页开始。 */
+        const cid = readerRoot.dataset.currentBook;
+        const pr = state.progress[cid] || {};
+        switchChapter(cid, ch, Number(ch) === (pr.ch || 0) ? (pr.pct || 0) : 0);
+        break;
+      }
       case 'toggle-bookmark': toggleBookmark(); break;
       case 'toggle-tts':
         openListen(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) || 1);
