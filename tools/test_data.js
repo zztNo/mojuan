@@ -573,6 +573,101 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
     await ctx.close();
   }
 
+  /* ---------- N. 封面图单独存：档案主体不再被 base64 拖垮，也不再被它拖累 ---------- */
+  {
+    const cover = 'data:image/png;base64,' + 'A'.repeat(120000);
+    const withCover = { covers: { shijing: { image: cover } } };
+
+    /* N1 老数据（封面压在主键里）自动搬迁，主键瘦身 */
+    {
+      const { ctx, p, errs } = await scene(browser, seeded(withCover));
+      await p.goto(FILE + '#/shelf');
+      await p.waitForTimeout(450);
+      const r = await p.evaluate(() => {
+        const main = localStorage.getItem('mojuan.state.v1') || '';
+        const cs = JSON.parse(localStorage.getItem('mojuan.covers.v1') || '{}');
+        return {
+          mainLen: main.length, hasCovers: main.indexOf('"covers"') >= 0,
+          imgLen: (cs.shijing && cs.shijing.image || '').length
+        };
+      });
+      ok('老数据封面自动搬到独立键', r.imgLen === cover.length, JSON.stringify(r));
+      ok('主档案瘦身到几 KB，不再含封面', r.mainLen < 20000 && !r.hasCovers, JSON.stringify(r));
+      ok('搬迁无报错', errs.length === 0, errs.join(' | '));
+      await ctx.close();
+    }
+
+    /* N2 封面键写不进（配额被占满），主体存档照常成功 */
+    {
+      const { ctx, p, errs } = await scene(browser, seeded(withCover), async (sp) => {
+        await sp.addInitScript(() => {
+          const raw = Storage.prototype.setItem;
+          window.__mainWrites = [];
+          Storage.prototype.setItem = function (k, v) {
+            if (k === 'mojuan.covers.v1') {
+              const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e;
+            }
+            if (k === 'mojuan.state.v1') window.__mainWrites.push(typeof v === 'string' ? v.length : 0);
+            return raw.call(this, k, v);
+          };
+        });
+      });
+      await p.goto(FILE + '#/reader/shijing/1');
+      await p.waitForSelector('[data-action="reader-settings"]', { timeout: 8000 });
+      await p.click('[data-action="reader-settings"]');
+      await p.click('[data-action="set-flipanim"][data-val="none"]');
+      await p.waitForTimeout(250);
+      const st = await readState(p);
+      ok('封面键写不进，主体设置照样落盘', st.settings && st.settings.flipAnim === 'none', JSON.stringify(st.settings));
+      ok('主档案里没有封面字段', !('covers' in st), JSON.stringify(Object.keys(st)));
+      const lens = await p.evaluate(() => window.__mainWrites || []);
+      ok('每次写主档案都只有几 KB', lens.length > 0 && lens.every((n) => n < 20000), JSON.stringify(lens));
+      ok('拆键场景无报错', errs.length === 0, errs.join(' | '));
+      await ctx.close();
+    }
+
+    /* N3 换封面时改动会写回独立键，图片不丢 */
+    {
+      const { ctx, p, errs } = await scene(browser, seeded(withCover));
+      await p.goto(FILE + '#/book/shijing');
+      await p.waitForSelector('[data-action="open-cover"]', { timeout: 8000 });
+      await p.click('[data-action="open-cover"]');
+      await p.waitForSelector('[data-action="cover-save"]', { timeout: 8000 });
+      await p.click('[data-action="cover-save"]');
+      await p.waitForTimeout(300);
+      const r = await p.evaluate(() => {
+        const cs = JSON.parse(localStorage.getItem('mojuan.covers.v1') || '{}');
+        return { has: !!cs.shijing, imgLen: (cs.shijing && cs.shijing.image || '').length };
+      });
+      ok('换封面会写回独立键且图片不丢', r.has && r.imgLen === cover.length, JSON.stringify(r));
+      ok('换封面场景无报错', errs.length === 0, errs.join(' | '));
+      await ctx.close();
+    }
+
+    /* N4 备份往返：恢复出来的封面也要落在独立键里，不能塞回主档案 */
+    {
+      const cover = 'data:image/png;base64,' + 'A'.repeat(120000);
+      const { ctx, p, errs } = await scene(browser, seeded());
+      await p.goto(FILE + '#/me');
+      await p.waitForSelector('#backupFileInput', { state: 'attached', timeout: 8000 });
+      const backup = JSON.parse(fs.readFileSync(backupPath, 'utf8').replace(/^\uFEFF/, ''));
+      backup.state = { v: 5, shelf: ['shijing'], covers: { shijing: { image: cover } } };
+      const f = path.join(os.tmpdir(), 'mj-restore-cover.json');
+      fs.writeFileSync(f, JSON.stringify(backup), 'utf8');
+      await p.setInputFiles('#backupFileInput', f);
+      await p.waitForTimeout(1100);
+      const r = await p.evaluate(() => {
+        const main = localStorage.getItem('mojuan.state.v1') || '';
+        const cs = JSON.parse(localStorage.getItem('mojuan.covers.v1') || '{}');
+        return { mainHasImg: main.indexOf('data:image') >= 0, imgLen: (cs.shijing && cs.shijing.image || '').length };
+      });
+      ok('恢复备份时封面写进独立键', r.imgLen === cover.length, JSON.stringify(r));
+      ok('恢复备份不会把封面塞回主档案', !r.mainHasImg, JSON.stringify(r));
+      ok('备份往返无报错', errs.length === 0, errs.join(' | '));
+      await ctx.close();
+    }
+  }
+
   await browser.close();
   console.log('\n数据安全 / 兼容专项：' + pass + ' PASS / ' + fail + ' FAIL');
   if (fail) process.exit(1);

@@ -1,6 +1,6 @@
-// content-hash: f1181dc96f34
+// content-hash: ebba517777a9
 /* 墨卷 · 离线缓存 */
-const CACHE = 'mojuan-v79';
+const CACHE = 'mojuan-v80';
 const ASSETS = [
   './',
   './index.html',

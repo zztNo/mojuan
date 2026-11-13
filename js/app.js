@@ -293,7 +293,7 @@
         try { await saveContent(id, { id, chapters }); } catch (e) { weakSave += 1; }
         contentCache[id] = { id, chapters };
         cacheTouch(id);
-        if (r.cover) state.covers[id] = { image: r.cover };
+        if (r.cover) { state.covers[id] = { image: r.cover }; markCoversDirty(); }
         state.localBooks.unshift(meta);
         if (!state.shelf.includes(id)) state.shelf.unshift(id);
         state.progress[id] = { ch: 1, pct: 0, updated: now };
@@ -318,7 +318,7 @@
       delete contentCache[x];
       const oi = cacheOrder.indexOf(x); if (oi >= 0) cacheOrder.splice(oi, 1);
       delete state.progress[x];
-      delete state.covers[x];
+      delete state.covers[x]; markCoversDirty();
       delete state.bookmarks[x];
       delete state.annotations[x];
       delete state.bookTags[x];
@@ -345,6 +345,8 @@
   ];
   /* ---------- 状态 ---------- */
   const KEY = 'mojuan.state.v1';
+  /* 封面图是几十 KB 一张的 base64，单独存一个键；理由见 save() */
+  const COVERS_KEY = 'mojuan.covers.v1';
   const DEFAULTS = {
     /* 藏卷默认空着 —— 这是用户自己攒的书架，不该由程序塞书进来 */
     shelf: [],
@@ -410,8 +412,13 @@
     state.v = 5;
     /* 迁移结果必须立刻落盘：否则用户把种子书重新加回藏卷后，
      * 下次启动又会因为版本号没升级而被当成种子再删一遍。
-     * （此处 save() 还没初始化完，直接写 localStorage） */
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* 配额满就下次再说，迁移本身幂等 */ }
+     * （此处 save() 还没初始化完，直接写 localStorage；封面走自己的键） */
+    try {
+      const light = Object.assign({}, state); delete light.covers;
+      localStorage.setItem(KEY, JSON.stringify(light));
+      const cs = state.covers || {};
+      if (Object.keys(cs).length) localStorage.setItem(COVERS_KEY, JSON.stringify(cs));
+    } catch (e) { /* 配额满就下次再说，迁移本身幂等 */ }
   })();
   function normalizeState(raw) {
     try {
@@ -429,8 +436,25 @@
     } catch (e) { return structuredClone(DEFAULTS); }
   }
   function load() {
-    try { return normalizeState(JSON.parse(localStorage.getItem(KEY) || '{}')); }
-    catch (e) { return structuredClone(DEFAULTS); }
+    let raw = {}, covers = {};
+    try { raw = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { raw = {}; }
+    try { covers = JSON.parse(localStorage.getItem(COVERS_KEY) || '{}') || {}; } catch (e) { covers = {}; }
+    /* 存量用户的封面还压在主键里：先搬出来，再把主键瘦身写回。
+       顺序不能反 —— 先写封面键的话，新旧两份大字符串会同时占着存储，
+       本来刚好够用的配额会被这一下顶爆，迁移反而失败。 */
+    if (raw.covers && Object.keys(raw.covers).length) {
+      covers = Object.assign({}, raw.covers, covers);
+      delete raw.covers;
+      try {
+        localStorage.setItem(KEY, JSON.stringify(raw));
+        localStorage.setItem(COVERS_KEY, JSON.stringify(covers));
+      } catch (e) { /* 写不进去就留到下次，内存里封面是全的，这次照样能用 */ }
+    }
+    try {
+      const st = normalizeState(raw);
+      st.covers = Object.assign({}, st.covers, covers);
+      return st;
+    } catch (e) { return structuredClone(DEFAULTS); }
   }
   /* localStorage 每源上限：Chrome 约 500 万字符（UTF-16），这里按字符数估，
      只用来分「宽裕 / 偏紧 / 已满」三档，不给用户一个假的精确总量。 */
@@ -455,19 +479,40 @@
     return mb >= 0.1 ? mb.toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
   }
   let saveWarned = false, saveWarnAt = 0;
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); return true; }
-    catch (e) {
-      /* 配额满之后不能只提醒一次：此后每次改动都会静默丢失，页面却照常显示「已保存」。
-         5 秒节流一下，避免高频操作刷屏。 */
-      const now = Date.now();
-      ui.storageFull = true;
-      if (!saveWarned || now - saveWarnAt > 5000) {
-        saveWarned = true; saveWarnAt = now;
-        try { toast('本地存储已满，这次改动没能保存；可到「墨斋 · 卷档管理」导出备份并清理封面图'); } catch (_) { /* 忽略 */ }
-      }
-      return false;
+  /* 封面只在被改动时才写自己的键；写失败冷却 30 秒再试，别让每次翻页都
+     白序列化几 MB。改动封面的入口统一调 markCoversDirty()。 */
+  let coversDirty = false, coverRetryAt = 0;
+  function markCoversDirty() { coversDirty = true; }
+  function warnSave(text) {
+    const now = Date.now();
+    if (!saveWarned || now - saveWarnAt > 5000) {
+      saveWarned = true; saveWarnAt = now;
+      try { toast(text); } catch (_) { /* 忽略 */ }
     }
+  }
+  function save() {
+    /* 封面图跟进度、笔记挤在同一个键里有两个坏处：
+       ① 每翻一页存档都要把几 MB 的 base64 重新 stringify 一遍；
+       ② 封面把配额占满后整份 setItem 抛异常，连「读到第几页」都一起存不进去，
+          丢的是全部改动。拆成两个键，主体始终只有几 KB，互不影响。 */
+    const light = Object.assign({}, state);
+    delete light.covers;
+    let mainOK = true, coverOK = true;
+    try { localStorage.setItem(KEY, JSON.stringify(light)); }
+    catch (e) {
+      mainOK = false; ui.storageFull = true;
+      warnSave('本地存储已满，这次改动没能保存；可到「墨斋 · 卷档管理」导出备份并清理封面图');
+    }
+    if (coversDirty && Date.now() >= coverRetryAt) {
+      try { localStorage.setItem(COVERS_KEY, JSON.stringify(state.covers || {})); }
+      catch (e) {
+        coverOK = false; coverRetryAt = Date.now() + 30000;
+        warnSave('封面图没能存下（本机空间不足），进度、笔记与设置不受影响');
+      }
+      /* 成败都不留着反复重试：下次改动封面会重新标记，或冷却过后自动再试 */
+      coversDirty = false;
+    }
+    return mainOK && coverOK;
   }
   /* 翻页/滚动会高频触发存档，但 state 含封面等大字段，整份 JSON.stringify 很重。
      合并成 500ms 内的最后一次落盘，避免每翻一页都卡一下主线程。
@@ -1016,14 +1061,17 @@
          会把旧 state 写回 localStorage，刚恢复的数据瞬间被覆盖回去。 */
       const merged = normalizeState(obj.state);
       state = merged;
-      localStorage.setItem(KEY, JSON.stringify(state));
+      /* 备份里的封面要写进自己的键；主体走 save() 的瘦身路径，
+         免得一份几十 MB 的备份因为封面挤不进配额就把整个恢复判成失败。 */
+      markCoversDirty();
+      const restored = save();
       EXTRA_KEYS.forEach((k) => {
         try {
           if (extras[k] != null) localStorage.setItem(k, extras[k]);
           else localStorage.removeItem(k);
         } catch (e) { /* 单个配置失败不影响主体 */ }
       });
-      toast('恢复完成，正在重新载入…');
+      toast(restored ? '恢复完成，正在重新载入…' : '恢复完成（本机空间不足，部分封面可能没能长期保存），正在重新载入…');
       setTimeout(() => location.reload(), 600);
     } catch (e) {
       toast('恢复失败：' + (e && e.message ? e.message : '未知错误'));
@@ -5110,6 +5158,7 @@
         if (!ids.length) { toast('没有可清理的封面图'); break; }
         if (!confirm('清理 ' + ids.length + ' 张自定义封面图？\n\n封面的底纹、配色与印章会保留，只是不再显示照片；此操作不可撤销。')) break;
         ids.forEach((x) => { delete state.covers[x].image; });
+        markCoversDirty();
         const okSave = save();
         if (okSave) ui.storageFull = false;
         /* 这一行在墨斋页中部，直接 render() 会把页面滚回页首（按钮刚点完就被甩走）。
@@ -5219,7 +5268,7 @@
         const cd = ui.coverDraft, d = cd.draft;
         const c = { motif: d.motif, color: d.color, color2: d.color2, seal: d.seal, hideText: !!d.hideText };
         if (d.image) c.image = d.image;
-        state.covers[cd.id] = c;
+        state.covers[cd.id] = c; markCoversDirty();
         const ok = save();
         closeCoverEditor();
         toast(ok ? '封面已更换' : '已应用，但本机空间不足无法长期保存');
@@ -5228,7 +5277,7 @@
       case 'cover-reset': {
         if (!ui.coverDraft) break;
         const b = getBook(ui.coverDraft.id);
-        delete state.covers[ui.coverDraft.id]; save();
+        delete state.covers[ui.coverDraft.id]; markCoversDirty(); save();
         ui.coverDraft.draft = {
           motif: b.motif, color: b.color, color2: b.color2,
           seal: b.seal, image: null, hideText: false
@@ -5316,6 +5365,7 @@
           if (!c.motif) c.motif = b.motif;
           state.covers[x] = c;
         });
+        markCoversDirty();
         save(); toast('已批量更换封面'); rerender(); break;
       }
       case 'bulk-copy-list':
@@ -5460,7 +5510,9 @@
             }
             del.forEach((k) => localStorage.removeItem(k));
           } catch (e) { /* 存储不可用 */ }
-          state = structuredClone(DEFAULTS); state.v = 5; save();
+          state = structuredClone(DEFAULTS); state.v = 5;
+          coversDirty = false; /* 刚清空，别又写一个空的封面键回来 */
+          save();
           ids.forEach((x) => { deleteContent(x).catch(() => {}); delete contentCache[x]; });
           /* 听书音频缓存是另一个 IndexedDB，不清会白占几十 MB */
           try { indexedDB.deleteDatabase(AUDIO_DB); } catch (e) {}
