@@ -1265,11 +1265,18 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .listen {
   position: fixed; inset: 0; z-index: 180; display: flex; flex-direction: column;
   background: var(--lbg); color: var(--link); animation: fadeIn .25s ease both;
+  /* 选中态强调色按「听卷纸张」定，不跟随全站主题：日间主题配夜墨纸时，
+     全局 --cinnabar 仍是暗红，落在深底上只有 2.65:1，10px 小字几乎看不见。 */
+  --lmark: #aa3b30;
+  --lmark-soft: rgba(170, 59, 48, .10);
 }
 .listen[data-paper="xuan"] { --lbg: #f7f2e6; --link: #2b2b28; --lsub: #6f6a60; }
 .listen[data-paper="bamboo"] { --lbg: #e9efe4; --link: #29352c; --lsub: #5f6f5e; }
 .listen[data-paper="sheep"] { --lbg: #f2e5cd; --link: #3b3024; --lsub: #74634a; }
-.listen[data-paper="night"] { --lbg: #161a1c; --link: #c9c9c2; --lsub: #8e9694; }
+.listen[data-paper="night"] {
+  --lbg: #161a1c; --link: #c9c9c2; --lsub: #8e9694;
+  --lmark: #e39a89; --lmark-soft: rgba(227, 154, 137, .16);
+}
 .listen::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(420px 420px at 50% 20%, rgba(170, 59, 48, .07), transparent 70%),
@@ -1298,7 +1305,7 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 }
 .listen-book { font-family: var(--font-serif); font-size: 21px; font-weight: 700; letter-spacing: .06em; }
 .listen-author { font-size: 12px; color: var(--lsub); }
-.listen-chapter { margin-top: 8px; font-family: var(--font-serif); font-size: 13px; color: var(--cinnabar); }
+.listen-chapter { margin-top: 8px; font-family: var(--font-serif); font-size: 13px; color: var(--lmark); }
 .listen-lyric {
   max-width: min(520px, 88vw); min-height: 3.6em; margin-top: 14px; padding: 11px 15px;
   border-radius: 10px; border: 1px solid color-mix(in srgb, var(--link) 9%, transparent);
@@ -1326,6 +1333,7 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .listen-buttons { display: flex; align-items: center; justify-content: center; gap: 36px; margin-bottom: 14px; }
 .listen-buttons .icon-btn { color: var(--link); }
 .icon-btn.lg .ic { width: 27px; height: 27px; }
+/* 播放键故意留全局暗红：底上配的是米白图标，换成夜墨的亮红反而把图标吃掉 */
 .listen-play {
   width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
   background: var(--cinnabar); color: #fff8ec; box-shadow: 0 8px 24px rgba(170, 59, 48, .3);
@@ -1344,7 +1352,13 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
   background: color-mix(in srgb, var(--link) 7%, transparent);
   color: var(--lsub); font-size: 12px;
 }
-.listen-tools button:hover { border-color: var(--cinnabar); color: var(--cinnabar); }
+/* 「听到哪」的文案会跟着定时倒计时变（全书 / 15分 / 59秒 / 即将收卷），
+   宽度一变其余三键就跟着左右挪（实测最多 10px）。固定下限 + 等宽数字，四键钉在原位。 */
+.listen-tools #ltWhere {
+  box-sizing: border-box; min-width: 96px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.listen-tools button:hover { border-color: var(--lmark); color: var(--lmark); }
 /* 面板跟着纸张走：以前这里用的是全局 --paper-2 / --ink-3，夜墨底下会冒出一张白纸，
    而选项文字继承 --link（浅灰）落在白底上几乎看不见 */
 .listen-panel {
@@ -1359,15 +1373,20 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 /* 范围只有两档，别跟着定时用三列、留一个空格；副标说明「念完会怎样」，比原来一键切换好懂 */
 .listen-panel .rs-pills.lp-where-scope { grid-template-columns: repeat(2, 1fr); }
 .lp-where-scope .rs-pill small { display: block; margin-top: 2px; font-size: 10px; line-height: 1.4; color: var(--lsub); }
-.lp-where-scope .rs-pill.active small { color: var(--cinnabar); }
+.lp-where-scope .rs-pill.active small { color: var(--lmark); }
 .listen-panel .rs-pill {
   border-color: color-mix(in srgb, var(--link) 18%, transparent);
   color: var(--link); text-align: center;
 }
+/* 选中态要带上 .listen-panel 前缀：单写 .rs-pill.active 与上面同优先级又排在前面，
+   主文字会被压回 --link，选中只剩一点淡淡的背景色，等于没标出来。 */
+.listen-panel .rs-pill.active {
+  color: var(--lmark); border-color: var(--lmark); background: var(--lmark-soft);
+}
 .lp-list { display: flex; flex-direction: column; gap: 3px; }
 .lp-item { padding: 8px 10px; border-radius: 8px; text-align: left; font-size: 12.5px; color: var(--link); }
 .lp-item:hover { background: color-mix(in srgb, var(--link) 8%, transparent); }
-.lp-item.active { color: var(--cinnabar); background: var(--cinnabar-soft); }
+.lp-item.active { color: var(--lmark); background: var(--lmark-soft); }
 .lp-item small { display: block; font-size: 10px; color: var(--lsub); }
 .lp-empty { padding: 0 0 10px; font-size: 12px; line-height: 1.7; color: var(--lsub); }
 /* 音色一行 = 选择按钮 + 试听键（音色名看不出嗓音，先听一耳朵再选） */

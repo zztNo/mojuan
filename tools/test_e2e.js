@@ -839,6 +839,89 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- Q. 夜墨听卷纸的可读性 + 底栏不随倒计时文案抖 ---------- */
+  {
+    /* 把半透明背景一路合成到不透明祖先，算 WCAG 对比度 */
+    const ratioOf = (p, sel) => p.evaluate((s) => {
+      const parse = (v) => {
+        const m = String(v).match(/rgba?\(([^)]+)\)/);
+        if (!m) return [0, 0, 0, 0];
+        const a = m[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+        return [a[0], a[1], a[2], a.length > 3 ? a[3] : 1];
+      };
+      const el = document.querySelector(s);
+      if (!el) return 0;
+      const layers = [];
+      let n = el;
+      while (n) {
+        const c = parse(getComputedStyle(n).backgroundColor);
+        if (c[3] > 0) layers.push(c);
+        n = n.parentElement;
+      }
+      let bg = [255, 255, 255];
+      for (let i = layers.length - 1; i >= 0; i--) {
+        const c = layers[i], a = c[3];
+        bg = [0, 1, 2].map((k) => c[k] * a + bg[k] * (1 - a));
+      }
+      const lum = (rgb) => {
+        const f = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+        return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+      };
+      const fg = parse(getComputedStyle(el).color).slice(0, 3);
+      const a = lum(fg), b = lum(bg);
+      return +((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toFixed(2);
+    }, sel);
+
+    const p = await newPage(browser, { settings: { paper: 'night' } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.click('[data-action="listen-panel"][data-val="where"]');
+    await p.waitForTimeout(250);
+    const cSmall = await ratioOf(p, '.lp-where-scope .rs-pill.active small');
+    const cPill = await ratioOf(p, '.lp-where-scope .rs-pill.active');
+    ok('日间主题配夜墨纸：选中范围副标达 AA', cSmall >= 4.5, String(cSmall));
+    ok('日间主题配夜墨纸：选中档位主文字达 AA', cPill >= 4.5, String(cPill));
+    const cChap = await ratioOf(p, '#listenChapter');
+    ok('日间主题配夜墨纸：章名也达 AA', cChap >= 4.5, String(cChap));
+    const marked = await p.evaluate(() => {
+      const on = document.querySelector('.lp-where-scope .rs-pill.active');
+      const off = document.querySelector('.lp-where-scope .rs-pill:not(.active)');
+      return !!on && !!off && getComputedStyle(on).color !== getComputedStyle(off).color;
+    });
+    ok('选中档位主文字不再被压回普通正文色', marked, String(marked));
+
+    /* 全站夜间主题会把全局朱砂提亮，浅色纸配亮红反而看不清：强调色按纸张固定才稳 */
+    await p.evaluate(() => {
+      document.body.dataset.theme = 'night';
+      document.getElementById('listen').dataset.paper = 'xuan';
+    });
+    await p.waitForTimeout(100);
+    const cLight = await ratioOf(p, '.lp-where-scope .rs-pill.active small');
+    ok('夜间主题配浅色纸：选中副标仍达 AA', cLight >= 4.5, String(cLight));
+
+    const stable = await p.evaluate(() => {
+      const w = document.getElementById('ltWhere');
+      const keys = [...document.querySelectorAll('.listen-tools button')];
+      const labels = ['听到哪 · 全书', '听到哪 · 15分', '听到哪 · 9分', '听到哪 · 59秒', '即将收卷'];
+      const rows = labels.map((t) => {
+        w.textContent = t;
+        return keys.map((k) => Math.round(k.getBoundingClientRect().left)).join(',');
+      });
+      return { all: rows, same: rows.every((r) => r === rows[0]) };
+    });
+    ok('倒计时文案变化不推动底栏其它键', stable.same, JSON.stringify(stable.all));
+
+    await p.setViewportSize({ width: 360, height: 820 });
+    await p.waitForTimeout(120);
+    const rows360 = await p.evaluate(() =>
+      [...new Set([...document.querySelectorAll('.listen-tools button')]
+        .map((e) => Math.round(e.getBoundingClientRect().top)))].length);
+    ok('加固定宽度后 360 宽四键仍是一行', rows360 === 1, String(rows360));
+    await p.close();
+  }
+
   /* ---------- F. 单文件离线版 ---------- */
   {
     const p = await newPage(browser, {
