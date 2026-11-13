@@ -118,7 +118,11 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
       'mojuan.sources.custom': '[{"id":"x","name":"我的源"}]',
       'mojuan.sources.off': '["wikisource"]',
       'mojuan.voice.v1': '{"azure":{"key":"secret"}}',
-      'mojuan.toc.v1': '{"cache":1}'
+      'mojuan.toc.v1': '{"cache":1}',
+      /* 两卷正文：分段导出时卷与卷之间的逗号是单独一个 Blob 片段，
+         contents 为空的话拼错了也测不出来 */
+      'mojuan.content.x': '{"paras":["甲"]}',
+      'mojuan.content.y': '{"paras":["乙"]}'
     };
     const { ctx, p, errs } = await scene(browser, seeded(null, extra));
     await p.goto(FILE + '#/me');
@@ -132,6 +136,12 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
     fs.copyFileSync(f, backupPath);
     const obj = JSON.parse(fs.readFileSync(backupPath, 'utf8').replace(/^\uFEFF/, ''));
     ok('备份版本升到 2', obj.version === 2, 'v=' + obj.version);
+    ok('分段导出后 state 仍是完整对象', !!obj.state && obj.state.v === 5 && Array.isArray(obj.state.shelf),
+      JSON.stringify(obj.state && Object.keys(obj.state)));
+    ok('分段导出后 contents 仍是对象', !!obj.contents && typeof obj.contents === 'object', typeof obj.contents);
+    ok('多卷正文分段拼接后 JSON 仍合法且内容完整',
+      !!(obj.contents.x && obj.contents.x.paras[0] === '甲' && obj.contents.y && obj.contents.y.paras[0] === '乙'),
+      JSON.stringify(obj.contents));
     ok('备份含自定义书源', obj.extras && obj.extras['mojuan.sources.custom'] === extra['mojuan.sources.custom']);
     ok('备份含停用的源', obj.extras && obj.extras['mojuan.sources.off'] === extra['mojuan.sources.off']);
     ok('备份含在线音色 key', obj.extras && obj.extras['mojuan.voice.v1'] === extra['mojuan.voice.v1']);
@@ -666,6 +676,62 @@ const readState = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('mojua
       ok('备份往返无报错', errs.length === 0, errs.join(' | '));
       await ctx.close();
     }
+  }
+
+  /* ---------- O. 备份恢复降级路径：localStorage 半途写爆，必须整体回滚 ---------- */
+  {
+    const oldA = { paras: ['OLD-A'] }, oldB = { paras: ['OLD-B'] }, oldC = { paras: ['OLD-C'] };
+    const { ctx, p, errs } = await scene(browser, seeded(null, {
+      'mojuan.content.a': JSON.stringify(oldA),
+      'mojuan.content.b': JSON.stringify(oldB),
+      'mojuan.content.c': JSON.stringify(oldC)
+    }), async (sp) => {
+      await sp.addInitScript(() => {
+        const rawOpen = IDBFactory.prototype.open;
+        IDBFactory.prototype.open = function () {
+          if (window.__breakIDB) throw new Error('idb down');
+          return rawOpen.apply(this, arguments);
+        };
+        window.__newWrites = 0;
+        const rawSet = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          if (window.__breakLS && String(k).indexOf('mojuan.content.') === 0 && String(v).indexOf('NEW-') >= 0) {
+            window.__newWrites += 1;
+          }
+          /* 只拦「写新值」，回滚时写回旧值要放行 */
+          if (window.__breakLS && k === 'mojuan.content.c' && String(v).indexOf('NEW-C') >= 0) {
+            const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e;
+          }
+          return rawSet.call(this, k, v);
+        };
+      });
+    });
+    await p.goto(FILE + '#/me');
+    await p.waitForSelector('#backupFileInput', { state: 'attached', timeout: 8000 });
+    const backup = {
+      app: 'mojuan', version: 2, exportedAt: new Date().toISOString(),
+      state: { v: 5, shelf: ['lunyu'], settings: { pageMode: 'scroll' } },
+      contents: { a: { paras: ['NEW-A'] }, b: { paras: ['NEW-B'] }, c: { paras: ['NEW-C'] } },
+      extras: {}
+    };
+    const f = path.join(os.tmpdir(), 'mj-restore-partial.json');
+    fs.writeFileSync(f, JSON.stringify(backup), 'utf8');
+    await p.evaluate(() => { window.__breakIDB = true; window.__breakLS = true; });
+    await p.setInputFiles('#backupFileInput', f);
+    await p.waitForTimeout(700);
+    const r = await p.evaluate(() => ({
+      a: localStorage.getItem('mojuan.content.a'),
+      b: localStorage.getItem('mojuan.content.b'),
+      c: localStorage.getItem('mojuan.content.c'),
+      shelf: (JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}').shelf || [])[0],
+      newWrites: window.__newWrites || 0
+    }));
+    ok('确实走到半途写爆（前两卷已写入过新值）', r.newWrites >= 2, String(r.newWrites));
+    ok('正文半途写爆：前两卷已回滚', r.a === JSON.stringify(oldA) && r.b === JSON.stringify(oldB), JSON.stringify(r));
+    ok('正文半途写爆：第三卷旧值也还在', r.c === JSON.stringify(oldC), String(r.c));
+    ok('正文写失败时不覆盖主档案', r.shelf !== 'lunyu', String(r.shelf));
+    ok('回滚场景无报错', errs.length === 0, errs.join(' | '));
+    await ctx.close();
   }
 
   await browser.close();

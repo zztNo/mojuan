@@ -985,13 +985,16 @@
     const parts = ['\ufeff', '{"app":', JSON.stringify(BACKUP_APP),
       ',"version":', String(BACKUP_VER),
       ',"exportedAt":', JSON.stringify(new Date().toISOString()),
-      ',"state":', JSON.stringify(state),
+      ',"state":', new Blob([JSON.stringify(state)]),
       ',"contents":{'];
     let first = true;
     Object.keys(contents).forEach((k) => {
-      if (!first) parts.push(',');
-      first = false;
-      parts.push(JSON.stringify(k), ':', JSON.stringify(contents[k]));
+      const sep = first ? '' : ','; first = false;
+      /* 每卷序列化完立刻交给 Blob：字符串出栈就能回收，parts 里只留 Blob 片段。
+         早先是把整卷字符串 push 进数组，几十卷全攒在 JS 堆里，注释说的
+         「同时只存在单卷那一份」其实没做到。Blob 构造接受多个片段，
+         不必先拼成一个更大的字符串。 */
+      parts.push(new Blob([sep, JSON.stringify(k), ':', JSON.stringify(contents[k])]));
     });
     parts.push('},"extras":', JSON.stringify(extras), '}');
     const ok = downloadText('墨卷备份-' + today() + '.json', parts);
@@ -1042,8 +1045,16 @@
       } catch (e) { return false; }
     };
     const putLS = () => {
+      const keys = Object.keys(contents);
+      /* localStorage 没有事务：配额在第 N 卷爆掉时，前 N-1 卷已经写进去了。
+         先把旧值记下来，失败就整体回滚，否则「原有数据未改动」是一句谎话。 */
+      const before = {};
+      let written = 0;
       try {
-        Object.keys(contents).forEach((k) => localStorage.setItem(LS_PREFIX + k, JSON.stringify(contents[k])));
+        keys.forEach((k) => { before[LS_PREFIX + k] = localStorage.getItem(LS_PREFIX + k); });
+        for (; written < keys.length; written++) {
+          localStorage.setItem(LS_PREFIX + keys[written], JSON.stringify(contents[keys[written]]));
+        }
         const del = [];
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i);
@@ -1051,11 +1062,25 @@
         }
         del.forEach((k) => localStorage.removeItem(k));
         return true;
-      } catch (e) { return false; }
+      } catch (e) {
+        /* 先删掉这次写进去的键再还原旧值：新值还占着空间时，旧值更大的话
+           回滚自己也会被配额拦下。 */
+        try {
+          for (let i = 0; i < written; i++) localStorage.removeItem(LS_PREFIX + keys[i]);
+          keys.forEach((k) => {
+            const key = LS_PREFIX + k;
+            if (before[key] != null) localStorage.setItem(key, before[key]);
+          });
+        } catch (_) { /* 回滚也失败时至少别把页面搞崩，提示里不把话说满 */ }
+        return false;
+      }
     };
     try {
       const idbOK = await putIDB();
-      if (!idbOK && !putLS()) { toast('恢复失败：本地卷正文无法写入，原有数据未改动'); return; }
+      if (!idbOK && !putLS()) {
+        toast('恢复失败：本地卷正文没能完整写入（本机空间不足），已尝试还原原有数据；清理空间后再试');
+        return;
+      }
       /* 用与启动加载同一套规范化，缺字段的旧备份也不会让页面崩。
          内存里的 state 必须一起换：否则 reload 时 pagehide 的 flushSave()
          会把旧 state 写回 localStorage，刚恢复的数据瞬间被覆盖回去。 */
