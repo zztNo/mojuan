@@ -1270,7 +1270,7 @@
     const pr = state.progress[state.lastRead] || { ch: 1, pct: 0 };
     if (last && state.shelf.includes(last.id)) {
       const bp = bookPct(last);
-      const begun = !!state.progress[last.id];
+      const begun = !!state.progress[last.id] && (((pr.ch || 1) > 1) || bp > 0);
       const pctText = bp > 0 ? Math.max(1, Math.round(bp * 100)) : 0;
       html += `<div class="continue-card" data-action="continue-read" data-id="${last.id}">
         <div>${coverHtml(last)}</div>
@@ -1321,6 +1321,7 @@
     /* 搜索不在这里裁 order：重渲染若按关键词删卡片，之后删字放宽搜索就再也恢复不了。
        统一由 applyShelfSearch 切 hidden，DOM 里始终保留当前分组的全部卡片。 */
     ui.shelfVisibleIds = order.map((b) => b.id);
+    pruneShelfPick();
     if (!order.length) {
       html += `<div class="empty">${icon('search')}<p>这个分组还空着，长按卷册可批量理卷</p>
         <button class="btn btn-ghost" data-action="set-shelf-filter" data-val="all">看全部</button></div>`;
@@ -1383,6 +1384,14 @@
   }
   /* ---------- 藏卷搜索：直接切 hidden，不重渲染，保住输入焦点与滚动位置 ---------- */
   let shelfSearchTimer = null, noteSearchTimer = null;
+  /* 整理模式的选择集只能包含「此刻看得见」的卷：筛了标签、批量改了标记、搜了关键词之后，
+     被筛掉的卷若还留在集合里，编辑条会写「已选 3 卷」屏幕上却只有 1 卷，
+     再点「移出藏卷」就把屏幕外那几卷一起移走了（笔记多选早已这样收敛）。 */
+  function pruneShelfPick() {
+    if (!ui.selected || !ui.selected.size) return;
+    const keep = new Set(ui.shelfVisibleIds || []);
+    Array.from(ui.selected).forEach((x) => { if (!keep.has(x)) ui.selected.delete(x); });
+  }
   function applyShelfSearch(v) {
     ui.shelfSearch = v || '';
     const q = ui.shelfSearch.toLowerCase();
@@ -1393,6 +1402,7 @@
       if (hit) vis.push(el.dataset.id);
     });
     ui.shelfVisibleIds = vis; /* 整理/全选只作用于当前可见的卷 */
+    pruneShelfPick();
     const empty = $('#shelfNoMatch');
     if (empty) empty.hidden = vis.length > 0 || !q;
     const clr = $('.shelf-search-clear');
@@ -1555,6 +1565,9 @@
     const pr = state.progress[b.id];
     const chapters = chapterList(b);
     const bp = bookPct(b);
+    /* 「读过」看的是真读到哪儿，不是「有没有那条记录」：导入时会先写一条
+       {ch:1,pct:0}，只按记录判断就会出现「续卷 · 第 1 章」配「已读 —」的矛盾。 */
+    const begun = !!pr && ((pr.ch || 1) > 1 || bp > 0);
     let html = `<button class="btn btn-ghost btn-sm" style="margin-bottom:18px" data-action="history-back">${icon('back', 'ic-sm')} 返回</button>`;
     html += `<div class="detail-hero">
       <div class="detail-cover">${coverHtml(b)}
@@ -1574,7 +1587,7 @@
         <button class="link-more" style="align-self:flex-start;margin-bottom:14px" data-action="toggle-desc">${ui.descOpen ? '收起' : '展开简介'} ${icon('right', 'ic-sm')}</button>
         <div class="detail-tags">${b.tags.map((t) => `<span class="tag">${t}</span>`).join('')}</div>
         <div class="detail-actions">
-          <button class="btn btn-primary" data-action="start-read" data-id="${b.id}">${icon('book', 'ic-sm')} ${pr ? '续卷 · 第' + Math.min(chapters.length, pr.ch || 1) + '章' : '开卷'}</button>
+          <button class="btn btn-primary" data-action="start-read" data-id="${b.id}">${icon('book', 'ic-sm')} ${begun ? '续卷 · 第' + Math.min(chapters.length, pr.ch || 1) + '章' : '开卷'}</button>
           <button class="btn btn-ghost" data-action="${inShelf ? 'remove-shelf' : 'add-shelf'}" data-id="${b.id}">
             ${icon(inShelf ? 'check' : 'plus', 'ic-sm')} ${inShelf ? '已在藏卷' : '收入藏卷'}</button>
           ${b.local ? `<button class="btn btn-ghost btn-sm btn-danger" data-action="delete-local" data-id="${b.id}">${icon('trash', 'ic-sm')} 弃卷</button>` : ''}
@@ -2220,9 +2233,17 @@
     const ch = Number(readerRoot.dataset.currentCh);
     switchChapter(id, ch + (dy > 0 ? 1 : -1));
   }
+  /* 版面此刻到底是不是翻页：在线章取不到正文时会临时降级成滚动版，
+     可设置里仍然是「左右翻页」。点击左右、空格、方向键、进度条都要按真实版面走，
+     否则会推着上一本书留下的 flipState 空转，翻到页尾还会把阅读器切到另一卷去。 */
+  function readerFlipMode() {
+    return !!$('#reader') && readerRoot.dataset.mode === 'flip';
+  }
   function flipBy(delta) {
     const fs = flipState;
     if (!fs.pages.length || flipBusy) return;
+    /* 页码状态必须属于当前这一卷这一章：降级版面、刚换章、换卷的空档里都可能对不上 */
+    if (fs.id !== readerRoot.dataset.currentBook || fs.ch !== (Number(readerRoot.dataset.currentCh) || 1)) return;
     const np = fs.page + delta;
     const totalCh = chapterList(getBook(fs.id)).length;
     if (np < 0) {
@@ -2547,7 +2568,7 @@
     const { ch, inner } = ratioToChapter(ratio, total);
     const cur = Math.max(1, Number(readerRoot.dataset.currentCh) || 1);
     if (ch !== cur) { switchChapter(id, ch, inner); return; }
-    if (state.settings.pageMode === 'flip' && flipState.pages.length) {
+    if (readerFlipMode() && flipState.pages.length) {
       flipState.page = Math.min(flipState.pages.length - 1, Math.round(inner * (flipState.pages.length - 1)));
       renderFlipPage('next');
     } else {
@@ -2930,7 +2951,7 @@
     return {
       id: readerRoot.dataset.currentBook,
       ch: Number(readerRoot.dataset.currentCh) || 1,
-      page: state.settings.pageMode === 'flip' ? flipState.page : 0
+      page: readerRoot.dataset.mode === 'flip' ? flipState.page : 0
     };
   }
   /* 章号才是卷签的身份。页码只在翻页模式有意义：滚动模式恒为 0，
@@ -3326,7 +3347,8 @@
     /* 正在拖悬浮球时别顺手滚正文：手上一动、页面一跳，感觉就像球被拽住了 */
     if (listen.dragging) return;
     if (readerRoot.dataset.currentBook !== b.id) return;
-    if (state.settings.pageMode === 'flip') { listenFlipFollow(); return; }
+    /* 按真实版面：降级成滚动版时别再往翻页那条路上撞 */
+    if (readerFlipMode()) { listenFlipFollow(); return; }
     if (listen.expanded) return;
     listenScrollToPara();
   }
@@ -4337,7 +4359,7 @@
   /* 改完字号 / 行距后的统一收尾：翻页模式重排；滚动模式保住原来的阅读位置 */
   function restyleReader() {
     const body = $('#readerBody');
-    const isFlip = state.settings.pageMode === 'flip';
+    const isFlip = readerFlipMode();
     let ratio = 0, anchor = null;
     if (!isFlip && body) {
       const max = body.scrollHeight - body.clientHeight;
@@ -4875,7 +4897,10 @@
     d.setAttribute('aria-label', '在《' + b.title + '》中检索');
     d.setAttribute('tabindex', '-1');
     const rec = contentCache[b.id];
-    const cached = (rec && rec.chapters ? rec.chapters.filter(Boolean).length : 0);
+    /* 只数「真拿到正文」的章：失败章在缓存里也留了一条 {paras:null,error} 记录，
+       按 filter(Boolean) 数会把断网那一轮全算成已检索，进而 needNet 恒为 false，
+       恢复网络后再也没有「联网检索全书 / 重试未取回」的入口。 */
+    const cached = (rec && rec.chapters ? rec.chapters.filter((c) => c && c.paras && c.paras.length).length : 0);
     const total = chapterList(b).length;
     const needNet = b.online && cached < total;
     d.innerHTML = `<div class="search-head"><span>在《${esc(b.title)}》中检索</span>
@@ -4977,7 +5002,7 @@
     const bar = $('#searchNav'); if (bar) bar.hidden = true;
   }
   function focusSearchHit(pi) {
-    const flip = state.settings.pageMode === 'flip';
+    const flip = readerFlipMode();
     let tries = 0;
     const once = () => {
       let el;
@@ -5202,7 +5227,7 @@
       if (e.target.closest('mark.hl-mark')) return;
       if (e.target.closest('#readerBody') && !e.target.closest('button')) {
         if (ui.flipSwiped) { ui.flipSwiped = false; return; }
-        if (state.settings.pageMode === 'flip' && $('#reader')) {
+        if (readerFlipMode()) {
           const rect = $('#readerBody').getBoundingClientRect();
           const x = (e.clientX - rect.left) / rect.width;
           if (x < 0.32) { flipBy(-1); return; }
@@ -5551,11 +5576,24 @@
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-lh') p.classList.toggle('active', Number(p.dataset.val) === state.settings.lh); });
         break;
       }
-      case 'set-paper':
-        state.settings.paper = val; save(); applyReaderStyle();
+      case 'set-paper': {
+        /* 夜墨既是「纸」也是「全站主题」：以前只改 paper，theme 还停在 day，
+           底栏夜间按钮第一次点等于没反应（toast 说切了、纸色没变），
+           而且 lastDayPaper 没记下原来的浅色纸，第二次点亮时回到的是宣纸。
+           这里让两者始终同步，和 toggleNight() 的行为对齐。 */
+        const prevPaper = state.settings.paper;
+        state.settings.paper = val;
+        if (val === 'night') {
+          if (prevPaper && prevPaper !== 'night') state.settings.lastDayPaper = prevPaper;
+          state.settings.theme = 'night';
+        } else {
+          state.settings.theme = 'day';
+        }
+        save(); applyTheme(); applyReaderStyle();
         if (!$('#reader')) { rerender(); break; }
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-paper') p.classList.toggle('active', p.dataset.val === val); });
         break;
+      }
       case 'set-pagemode':
         state.settings.pageMode = val; save();
         if ($('#reader')) {
@@ -6197,7 +6235,7 @@
       }
       /* 焦点在原生按钮/链接上按空格，浏览器会自己激活它，别顺手再翻一页 */
       if (e.key === ' ' && /BUTTON|A|SELECT|INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
-      const paging = state.settings.pageMode === 'flip' && $('#reader');
+      const paging = readerFlipMode();
       /* 上下滚动模式：空格 / PageUp / PageDown / 上下键先滚正文。
          以前这些键不分模式一律「换章」，按一下空格就跳到下一章，读到哪儿全丢了。 */
       const scrollBody = paging ? null : $('#readerBody');

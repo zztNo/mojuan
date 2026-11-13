@@ -1161,6 +1161,261 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ---------- U. 在线章节取回：占位提示不能当正文缓存，冷却过后要真的再取 ---------- */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(400);
+    /* 假书源：第一次返回占位提示（模拟「需要联网 / 没取回来」），之后返回真正文 */
+    await p.evaluate(() => {
+      window.__gc = 0;
+      const meta = {
+        id: 'tst:b1', sourceId: 'tst', title: '测试卷', author: '某人', online: true,
+        desc: '探针', words: '1万', chars: 1000,
+        chapters: [{ no: 1, title: '第一章' }, { no: 2, title: '第二章' }]
+      };
+      window.MJ.sources.register({
+        id: 'tst', name: '探针源', desc: '测试', online: true,
+        metasSync: () => [meta],
+        getChapter: async (id, no) => {
+          window.__gc += 1;
+          if (window.__gc === 1) return ['（这一章暂未取到正文，点下方「重新取回」再试一次）'];
+          return ['第' + no + '章 真实正文第一段，长度足够观察渲染结果是否正确。', '第二段真实正文。'];
+        }
+      });
+    });
+    await p.evaluate(() => { location.hash = '#/reader/tst:b1/1'; });
+    await p.waitForTimeout(900);
+    const s1 = await p.evaluate(() => ({
+      retry: !!document.querySelector('[data-action="reader-retry"]'),
+      text: (document.querySelector('.reader-body') || {}).textContent || ''
+    }));
+    ok('占位提示按失败处理：给「重新取回」', s1.retry);
+    ok('占位提示不被当成正文显示', /暂未取到正文/.test(s1.text) && !/真实正文第一段/.test(s1.text));
+    /* 冷却期（首次失败 3 秒）内重进不该再发请求 */
+    await p.evaluate(() => { location.hash = '#/shelf'; });
+    await p.waitForTimeout(200);
+    await p.evaluate(() => { location.hash = '#/reader/tst:b1/1'; });
+    await p.waitForTimeout(500);
+    const cached = await p.evaluate(() => window.__gc);
+    ok('冷却期内不重复取章', cached <= 2, 'calls=' + cached);
+    /* 冷却过后再进：要真的再发一次，并把真正文渲染出来 */
+    await p.waitForTimeout(3200);
+    await p.evaluate(() => { location.hash = '#/shelf'; });
+    await p.waitForTimeout(200);
+    await p.evaluate(() => { location.hash = '#/reader/tst:b1/1'; });
+    await p.waitForTimeout(900);
+    const s2 = await p.evaluate(() => ({
+      calls: window.__gc,
+      retry: !!document.querySelector('[data-action="reader-retry"]'),
+      text: (document.querySelector('.reader-body') || {}).textContent || ''
+    }));
+    ok('冷却过后自动再取一次', s2.calls > cached, 'calls=' + cached + '→' + s2.calls);
+    ok('取回成功后渲染真正文', /真实正文第一段/.test(s2.text) && !s2.retry);
+    await p.close();
+  }
+
+  /* ---------- V. 在线音色：缓存写满 20 条触发修剪后，后面的话还要能存进去 ----------
+     旧实现修剪完顺手 close() 掉共享的 IndexedDB 连接，第 20 句起所有写入静默失败，
+     同一句下次重听还要再合成一次（重复计费）。这里数「合成了几次」和「库里存了几条」。 */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    p.on('console', (m) => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text()); });
+    await p.addInitScript(() => {
+      if (!sessionStorage.getItem('mj-seed-audio')) {
+        sessionStorage.setItem('mj-seed-audio', '1');
+        localStorage.setItem('mojuan.state.v1', JSON.stringify({ v: 5, shelf: [], settings: { pageMode: 'scroll' }, progress: {} }));
+      }
+      /* 假装配好了 Azure：走在线合成这条分支 */
+      localStorage.setItem('mojuan.voice.v1', JSON.stringify({
+        provider: 'azure', azure: { region: 'eastasia', key: 'fake-key', voice: 'zh-CN-XiaoxiaoNeural' }
+      }));
+      window.__synth = 0;
+      window.fetch = async () => {
+        window.__synth += 1;
+        return new Response(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]), { status: 200, headers: { 'content-type': 'audio/mpeg' } });
+      };
+      /* 假音频元素：立刻 onended，模拟一句念完 */
+      const FakeAudio = function () {
+        this.paused = true; this.ended = false; this.dataset = {};
+        const self = this;
+        this.play = () => {
+          self.paused = false;
+          setTimeout(() => { self.ended = true; self.paused = true; if (self.onended) self.onended(); }, 5);
+          return Promise.resolve();
+        };
+        this.pause = () => { self.paused = true; };
+        this.addEventListener = () => {}; this.removeEventListener = () => {};
+      };
+      window.Audio = FakeAudio;
+    });
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(400);
+    await p.evaluate(() => {
+      const sents = [];
+      for (let i = 1; i <= 26; i++) sents.push('这是第' + i + '句测试正文用于验证缓存写入。');
+      const meta = {
+        id: 'tst:b1', sourceId: 'tst', title: '测试卷', author: '某人', online: true,
+        desc: 'x', words: '1万', chars: 1000,
+        chapters: [{ no: 1, title: '第一章' }, { no: 2, title: '第二章' }]
+      };
+      window.MJ.sources.register({
+        id: 'tst', name: '探针源', desc: 't', online: true,
+        metasSync: () => [meta],
+        getChapter: async () => [sents.join('')]
+      });
+    });
+    await p.evaluate(() => { location.hash = '#/reader/tst:b1/1'; });
+    await p.waitForSelector('#ttsBtn', { timeout: 8000 });
+    await p.click('#ttsBtn');
+    await p.waitForSelector('#listen', { timeout: 8000 });
+    await p.waitForTimeout(500);
+    await p.evaluate(() => document.getElementById('listenPlay').click());
+    await p.waitForTimeout(6500);
+    const st = await p.evaluate(async () => {
+      const db = await new Promise((res) => {
+        const r = indexedDB.open('mojuan-audio', 1);
+        r.onsuccess = () => res(r.result); r.onerror = () => res(null);
+      });
+      const clips = db ? await new Promise((res) => {
+        const tx = db.transaction('clips', 'readonly');
+        const rq = tx.objectStore('clips').count();
+        rq.onsuccess = () => res(rq.result); rq.onerror = () => res(-1);
+      }) : -2;
+      return { synth: window.__synth, clips };
+    });
+    ok('连听超过 20 句确实在持续合成', st.synth >= 22, 'synth=' + st.synth);
+    ok('修剪后仍能写入：合成几条就存几条', st.clips === st.synth, 'synth=' + st.synth + ' clips=' + st.clips);
+    await p.close();
+  }
+
+  /* ---------- W. 藏卷整理：筛掉/改标记之后，选择集要跟着「看得见」的卷收敛 ---------- */
+  {
+    const p = await newPage(browser, {
+      shelf: ['shijing', 'daodejing', 'qianzi'],
+      bookTags: { shijing: 'want' }
+    }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForSelector('[data-shelf-card]', { timeout: 8000 });
+    await p.click('[data-action="toggle-edit"]');
+    await p.waitForSelector('.edit-bar', { timeout: 8000 });
+    await p.click('[data-action="select-all"]');
+    await p.waitForTimeout(150);
+    const before = await p.textContent('.edit-count');
+    ok('全选后计数是 3 卷', /已选\s*3\s*卷/.test(before.replace(/\s+/g, ' ')), before);
+    /* 筛到「想读」只剩 1 卷：看不见的那两卷不能还留在选择集里 */
+    await p.click('[data-action="set-shelf-filter"][data-val="want"]');
+    await p.waitForTimeout(200);
+    const after = await p.textContent('.edit-count');
+    ok('筛选后计数收敛到可见的 1 卷', /已选\s*1\s*卷/.test(after.replace(/\s+/g, ' ')), after);
+    await p.click('[data-action="open-shelf-actions"]');
+    await p.waitForTimeout(250);
+    await p.click('[data-action="batch-remove"]');
+    await p.waitForTimeout(300);
+    const shelf = await p.evaluate(() => JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}').shelf);
+    ok('移出藏卷只移走看得见的那一卷', shelf.length === 2 && !shelf.includes('shijing'), JSON.stringify(shelf));
+    await p.close();
+  }
+
+  /* ---------- X. 夜墨是「纸」也是「主题」：两者不能分叉 ---------- */
+  {
+    const p = await newPage(browser, {
+      settings: { paper: 'bamboo', theme: 'day', pageMode: 'scroll' },
+      progress: { shijing: { ch: 1, pct: 0, updated: 1 } }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#readerPaper', { timeout: 8000 });
+    /* 等版面真正落定（showReader 取完正文才写 dataset.mode），否则面板会被外层未展开的栏挡住 */
+    await p.waitForFunction(() => document.getElementById('readerRoot').dataset.mode === 'scroll', { timeout: 8000 });
+    await p.evaluate(() => document.querySelector('[data-action="reader-settings"]').click());
+    await p.waitForTimeout(500);
+    await p.click('[data-action="set-paper"][data-val="night"]');
+    await p.waitForTimeout(250);
+    const n1 = await p.evaluate(() => ({
+      theme: document.body.dataset.theme,
+      paper: document.getElementById('reader').dataset.paper
+    }));
+    ok('选夜墨纸：全站主题同步变夜', n1.theme === 'night' && n1.paper === 'night', JSON.stringify(n1));
+    /* 面板开着时底栏是 inert 的，先关面板再点夜间按钮 */
+    await p.evaluate(() => document.getElementById('readerMask').click());
+    await p.waitForTimeout(400);
+    /* 再点底栏「日间」：一次就要回到原来的青竹，不能回到宣纸 */
+    await p.click('#themeBtn');
+    await p.waitForTimeout(250);
+    const n2 = await p.evaluate(() => ({
+      theme: document.body.dataset.theme,
+      paper: document.getElementById('reader').dataset.paper
+    }));
+    ok('点一次就回到日光，且保住原来的纸色', n2.theme === 'day' && n2.paper === 'bamboo', JSON.stringify(n2));
+    await p.close();
+  }
+
+  /* ---------- Y. 详情页「续卷 / 开卷」与已读状态自洽 ---------- */
+  {
+    const p = await newPage(browser, {
+      shelf: ['shijing'],
+      progress: { shijing: { ch: 1, pct: 0, updated: 1 } }
+    }, errs);
+    await p.goto(FILE + '#/book/shijing');
+    await p.waitForSelector('[data-action="start-read"]', { timeout: 8000 });
+    const b1 = await p.textContent('[data-action="start-read"]');
+    const stat1 = await p.textContent('.detail-stats');
+    ok('只导入没读过：按钮写「开卷」', /开卷/.test(b1) && !/续卷/.test(b1), b1.trim());
+    ok('只导入没读过：已读是「—」', /—/.test(stat1), stat1.replace(/\s+/g, ' ').slice(0, 60));
+    await p.close();
+
+    const q = await newPage(browser, {
+      shelf: ['shijing'],
+      progress: { shijing: { ch: 3, pct: 0.2, updated: 1 } }
+    }, errs);
+    await q.goto(FILE + '#/book/shijing');
+    await q.waitForSelector('[data-action="start-read"]', { timeout: 8000 });
+    const b2 = await q.textContent('[data-action="start-read"]');
+    ok('真读到第 3 章：按钮写「续卷 · 第3章」', /续卷 · 第3章/.test(b2.replace(/\s+/g, ' ')), b2.trim());
+    await q.close();
+  }
+
+  /* ---------- Z. 检索抽屉：失败的章不算「已检索」，重试入口不能消失 ---------- */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(400);
+    await p.evaluate(() => {
+      window.__gc = 0;
+      const meta = {
+        id: 'tst:b1', sourceId: 'tst', title: '测试卷', author: '某人', online: true,
+        desc: '探针', words: '1万', chars: 1000,
+        chapters: [{ no: 1, title: '第一章' }, { no: 2, title: '第二章' }, { no: 3, title: '第三章' }]
+      };
+      window.MJ.sources.register({
+        id: 'tst', name: '探针源', desc: '测试', online: true,
+        metasSync: () => [meta],
+        getChapter: async (id, no) => {
+          window.__gc += 1;
+          if (no === 2) return ['（这一章暂未取到正文，点下方「重新取回」再试一次）'];
+          return ['第' + no + '章 正文一段足够长的内容，方便检索与渲染。'];
+        }
+      });
+    });
+    /* 先跑一遍失败章，再回到第一章打开检索抽屉 */
+    await p.evaluate(() => { location.hash = '#/reader/tst:b1/2'; });
+    await p.waitForTimeout(700);
+    await p.evaluate(() => { location.hash = '#/reader/tst:b1/1'; });
+    await p.waitForTimeout(700);
+    await p.click('[data-action="reader-search"]');
+    await p.waitForTimeout(300);
+    const s = await p.evaluate(() => {
+      const hint = document.getElementById('searchHint');
+      return { hint: !!hint, text: (hint || {}).textContent || '', all: !!document.querySelector('[data-action="search-all"]') };
+    });
+    ok('有失败章时检索抽屉仍给「联网检索全书」入口', s.hint && s.all, s.text.replace(/\s+/g, ' ').slice(0, 60));
+    /* 第 1 章读到、第 3 章被预取、第 2 章失败：应当是 2 / 3，绝不能是 3 / 3 */
+    const hintText = s.text.replace(/\s+/g, ' ');
+    ok('已检索章数不把失败章算进去', /2 \/ 3/.test(hintText) && !/3 \/ 3/.test(hintText), hintText.slice(0, 60));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
