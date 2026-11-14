@@ -1482,7 +1482,9 @@
     const seen = [];
     allBooks().forEach((b) => { if (b.category && seen.indexOf(b.category) < 0) seen.push(b.category); });
     const cats = ['全部'].concat(seen);
-    if (state.localBooks.length) cats.push('本地');
+    /* seen 已经从 allBooks() 收过本地卷的「本地」分类，再 push 会出现两个同名
+       chip、选中时两个一起高亮；只有旧数据没带 category 时才需要补一个 */
+    if (state.localBooks.length && cats.indexOf('本地') < 0) cats.push('本地');
     if (cats.indexOf(ui.cat) < 0) ui.cat = '全部';
     /* 卷源筛选：公版 / 在线 / 本地 是书里真实存在的三档（原「连载、完结」对公版书没有意义） */
     const srcChips = [['全部', '全部卷源'], ['公版', '公版'], ['在线', '在线']]
@@ -2430,6 +2432,8 @@
     body.addEventListener('pointerdown', (ev) => {
       if (ev.pointerType === 'mouse' && ev.button !== 0) return;
       if (flipBusy || !flipState.pages.length) return;
+      if (d && d.active) { abortDrag(); return; }
+      if (d) d = null;
       if (ev.target.closest('button, a, mark.hl-mark')) return;
       if ($('#hlPop') && !$('#hlPop').hidden) return;
       if (window.getSelection && String(window.getSelection()).trim()) return;
@@ -2475,6 +2479,19 @@
       if (!raf) raf = requestAnimationFrame(paint); /* 一帧只挪一次 */
       if (ev.cancelable) ev.preventDefault();
     }, { passive: false });
+    /* 第二根手指按下来（或驱动重复派发 pointerdown）时，前一次跟手必须先安全收尾：
+       直接覆盖 d 会让铺好的邻页图层永远留着，flipSwiped 也没人复位，下一次点按
+       会被当成「松手那下 click」吞掉。只清理、不提交页码。 */
+    const abortDrag = () => {
+      const cur = d; d = null;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      body.classList.remove('flip-dragging');
+      if (!cur || !cur.active) return;
+      if (cur.mode === 'real') realClear(); else clearAdj();
+      const fp = $('#flipPage'); if (fp) fp.style.transform = '';
+      ui.flipSwiped = true;
+      setTimeout(() => { ui.flipSwiped = false; }, 350);
+    };
     const end = (ev) => {
       if (!d) return;
       const cur = d; d = null;
@@ -2768,6 +2785,22 @@
     $$('[data-note-item]').forEach((el) => {
       if (!ui.notePicked.has(el.dataset.noteKey)) return;
       const d = el.querySelector('.ann-dot'); if (d) d.className = 'ann-dot hl-' + col;
+      /* applyNoteFilter 读的是 DOM 上的 data-note-color，只改圆点会让刚改完色的
+         笔记在新颜色筛选下永远找不到（数据还在，界面里却筛不出来） */
+      el.dataset.noteColor = col;
+    });
+    /* chip 的计数与 disabled 是渲染时算死的，改完色要跟着刷新，
+       否则「青竹 0」仍是禁用态，用户连这个筛选都点不进去 */
+    const cnt = { red: 0, jade: 0, gold: 0 };
+    $$('[data-note-item]').forEach((el) => {
+      const c = el.dataset.noteColor || 'red';
+      if (c in cnt) cnt[c] += 1;
+    });
+    $$('.note-color-row .chip[data-val]').forEach((chip) => {
+      const k = chip.dataset.val;
+      if (!(k in cnt)) return;
+      chip.textContent = NOTE_COLORS[k] + ' ' + cnt[k];
+      chip.disabled = cnt[k] === 0;
     });
     /* 笔记面板是开在阅读器里的，正文里的划线颜色要同步刷一下 */
     const cur = readerRoot.dataset.currentBook;
@@ -6312,6 +6345,11 @@
           scrollReaderBody(scrollBody, (e.key === 'ArrowDown' ? 1 : -1) * 120, false);
           return;
         }
+      }
+      /* 快捷键说明写了「Shift+空格 往回翻」：滚动模式上面已按 shift 处理，
+         翻页模式原先完全不看 shiftKey，照说明按反而是往后翻，翻到章末还会换章 */
+      if (paging && e.key === ' ' && e.shiftKey) {
+        e.preventDefault(); flipBy(-1); return;
       }
       if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         paging ? flipBy(-1) : switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1);

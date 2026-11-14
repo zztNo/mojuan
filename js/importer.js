@@ -141,7 +141,14 @@
     if (cur && cur.paras.length) chapters.push(cur);
     if (chapters.length <= 1) {
       const all = chapters.length ? chapters[0].paras : parasFromText(text);
-      return splitByLength(all);
+      const parts = splitByLength(all);
+      /* 只有一个章标记时（短篇、单章导出）别把用户写的章名丢掉：
+         splitByLength 只是给长文分节，首节仍用原标题，其余按「第 N 节」。
+         完全没有章标记时 parseTxt 给的标题是「开篇」，保持分节命名。 */
+      if (chapters.length === 1 && chapters[0].title !== '开篇' && parts.length) {
+        parts[0].title = chapters[0].title;
+      }
+      return parts;
     }
     /* 目录页/书名行产生的短「开篇」不算一章 */
     if (chapters[0].title === '开篇' && chapters[0].paras.join('').length < 80) chapters.shift();

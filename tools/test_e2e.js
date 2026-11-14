@@ -1653,6 +1653,134 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AC：分类 chip / 笔记改色 / Shift+空格 / 单章章名 / 双指拖拽 ===== */
+  {
+    const LOCAL = {
+      id: 'local-ac-1', local: true, title: '分类测试卷', author: '本地导入',
+      category: '本地', status: '本地', tags: ['本地导入'], words: '100字',
+      score: 9.0, readers: '本地卷', hot: 1, motif: 'ink', color: '#5a4a3a', color2: '#8a7a6a',
+      seal: '分', desc: '由本地文件导入，共 1 章。', chapters: ['第一章 初遇'], addedAt: 1
+    };
+    const p = await newPage(browser, { localBooks: [LOCAL] }, errs);
+    await p.goto(FILE + '#/store/category');
+    await p.waitForTimeout(400);
+    const n = await p.evaluate(() => document.querySelectorAll('.chip[data-action="set-cat"][data-val="本地"]').length);
+    ok('AC1 分类页「本地」只出现一次', n === 1, '实际 ' + n + ' 个');
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {
+      annotations: {
+        shijing: [
+          { text: '关关雎鸠，在河之洲', note: '', ch: 1, pi: 0, color: 'red' },
+          { text: '窈窕淑女，君子好逑', note: '', ch: 1, pi: 1, color: 'red' }
+        ]
+      }
+    }, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    await p.click('[data-action="toggle-note-multi"]');
+    await p.waitForTimeout(150);
+    await p.click('[data-note-item]');
+    await p.waitForTimeout(120);
+    await p.click('[data-action="note-bulk-color"][data-val="jade"]');
+    await p.waitForTimeout(180);
+    const c = await p.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('[data-note-item]'));
+      const chip = document.querySelector('.note-color-row .chip[data-val="jade"]');
+      return {
+        colors: items.map((el) => el.dataset.noteColor),
+        text: chip ? chip.textContent.trim() : '',
+        disabled: chip ? chip.disabled : null
+      };
+    });
+    ok('AC2 批量改色同步 DOM 颜色与 chip 计数', c.colors[0] === 'jade' && c.colors[1] === 'red'
+      && /1/.test(c.text) && c.disabled === false, JSON.stringify(c));
+    /* 修复前青竹 chip 是 disabled，这里绕过禁用只为走到筛选逻辑本身 */
+    await p.evaluate(() => {
+      const chip = document.querySelector('.note-color-row .chip[data-val="jade"]');
+      if (chip) { chip.disabled = false; chip.click(); }
+    });
+    await p.waitForTimeout(150);
+    const f = await p.evaluate(() => {
+      const nm = document.getElementById('noteNoMatch');
+      return {
+        shown: Array.from(document.querySelectorAll('[data-note-item]')).filter((el) => !el.hidden).length,
+        noMatch: !!(nm && !nm.hidden)
+      };
+    });
+    ok('AC3 改色后按新颜色能筛到笔记', f.shown === 1 && !f.noMatch, JSON.stringify(f));
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {
+      settings: { pageMode: 'flip', flipAnim: 'slide', fs: 26, lh: 2.8 }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    const footText = () => p.evaluate(() =>
+      (document.querySelector('#flipFoot') || {}).textContent.replace(/\s+/g, ' ').trim());
+    const parseFoot = (s) => {
+      const m = String(s).match(/第\s*(\d+)\s*章\s*·\s*(\d+)\s*\/\s*(\d+)\s*页/);
+      return m ? { ch: +m[1], p: +m[2] } : null;
+    };
+    await p.evaluate(() => document.getElementById('reader').focus());
+    await p.keyboard.press('ArrowRight');
+    /* flipSlide 动画 240ms、兜底 setTimeout 380ms，等不够会被 flipBusy 护栏挡回去 */
+    await p.waitForTimeout(520);
+    const beforeTxt = await footText();
+    await p.keyboard.press('Shift+Space');
+    await p.waitForTimeout(520);
+    const afterTxt = await footText();
+    const bf = parseFoot(beforeTxt), af = parseFoot(afterTxt);
+    /* 只读页码会假通过：按错方向翻到章末会换到下一章、页码又从 1 开始 */
+    ok('AC4 翻页模式 Shift+空格 往回翻（与快捷键说明一致）',
+      !!(bf && af && af.ch === bf.ch && af.p === bf.p - 1), beforeTxt + ' → ' + afterTxt);
+
+    const imp = await p.evaluate(async () => {
+      const txt = '第一章 初遇\n\n' + '关关雎鸠，在河之洲。'.repeat(400);
+      const res = await window.MJ.importer.parseFile(new File([txt], '单章.txt', { type: 'text/plain' }));
+      return { first: res.chapters[0].title, n: res.chapters.length };
+    });
+    ok('AC5 只有一个章标记的 TXT 保留原章名', imp.first === '第一章 初遇', JSON.stringify(imp));
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {
+      settings: { pageMode: 'flip', flipAnim: 'slide', fs: 26, lh: 2.8 }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    const foot = () => p.evaluate(() => parseInt(document.querySelector('#flipFoot b').textContent, 10));
+    const r = await p.locator('#readerBody').boundingBox();
+    const f0 = await foot();
+    await p.evaluate(() => {
+      const body = document.getElementById('readerBody');
+      const t = document.querySelector('#flipPage [data-fi]') || document.getElementById('flipPage');
+      const y = body.getBoundingClientRect().y + body.getBoundingClientRect().height * 0.4;
+      const fire = (type, x, pid) => t.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: pid, pointerType: 'touch',
+        clientX: x, clientY: y, button: 0
+      }));
+      window.getSelection().removeAllRanges();
+      fire('pointerdown', 300, 1);
+      fire('pointermove', 100, 1);
+      fire('pointerdown', 500, 2);
+      fire('pointerup', 500, 2);
+    });
+    await p.waitForTimeout(200);
+    const adj = await p.evaluate(() => {
+      const a = document.getElementById('flipAdj');
+      return a ? a.hidden : null;
+    });
+    ok('AC6 双指误触后邻页图层被清理', adj === true, 'flipAdj.hidden=' + adj);
+    await p.waitForTimeout(320);
+    await p.mouse.click(r.x + r.width * 0.86, r.y + r.height * 0.4);
+    await p.waitForTimeout(380);
+    ok('AC7 双指误触后下一次点击仍能翻页', (await foot()) === f0 + 1, f0 + ' → ' + (await foot()));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
