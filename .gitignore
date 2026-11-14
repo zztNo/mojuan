@@ -10,6 +10,8 @@ mojuan-offline.html
 *.jks
 *.p12
 signing-key-info.txt
+# PWABuilder 出包目录（含私钥、密码、aab/apk），整目录隔离
+墨卷阅读 - Google Play package/
 
 # 工具缓存：抓取/拆分书源的中间产物，体积大且可重建
 tools/cache/

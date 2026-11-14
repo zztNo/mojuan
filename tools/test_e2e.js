@@ -1416,6 +1416,149 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AA：寻卷篇目 / 防抖 / 书肆空态 / 换荐 / 弹层 Esc / 书源注册 ===== */
+  {
+    const LOCAL = {
+      id: 'local-aa-1', local: true, title: '山门记事', author: '本地导入',
+      category: '本地', status: '本地', tags: ['本地导入', 'TXT'], words: '200字',
+      score: 9.0, readers: '本地卷', hot: 60, motif: 'ink', color: '#5a4a3a', color2: '#8a7a6a',
+      seal: '山', desc: '由本地文件导入，共 2 章。山门初开，风过松林…',
+      chapters: ['第一章 山门', '第九章 归隐'], addedAt: 1
+    };
+    const p = await newPage(browser, { localBooks: [LOCAL] }, errs);
+    await p.goto(FILE + '#/search');
+    await p.waitForTimeout(350);
+    await p.fill('#searchInput', '归隐');
+    await p.waitForTimeout(280);
+    const hit = await p.evaluate(() => {
+      const box = document.getElementById('searchBody');
+      return {
+        local: !!box.querySelector('.book-row[data-id="local-aa-1"]'),
+        rows: box.querySelectorAll('.book-row').length,
+        text: box.textContent.replace(/\s+/g, ' ')
+      };
+    });
+    ok('AA1 本地导入卷的篇目名能被寻卷命中', hit.local, '命中 ' + hit.rows + ' 卷 / ' + hit.text.slice(0, 70));
+    ok('AA2 命中篇目时带出「含…」提示', /含「第九章 归隐」/.test(hit.text), hit.text.slice(0, 80));
+
+    /* 输入后 120ms 内清空：挂起的防抖不该把旧关键词写回结果区 */
+    await p.evaluate(() => {
+      const i = document.getElementById('searchInput');
+      i.value = '道德'; i.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('[data-action="clear-query"]').click();
+    });
+    await p.waitForTimeout(300);
+    const clr = await p.evaluate(() => ({
+      val: document.getElementById('searchInput').value,
+      head: !!document.querySelector('#searchBody .result-head'),
+      text: (document.getElementById('searchBody') || {}).textContent || ''
+    }));
+    ok('AA3 清空后结果区不被旧关键词覆盖', clr.val === '' && !clr.head, clr.text.replace(/\s+/g, ' ').slice(0, 60));
+
+    /* 热词点击同样要取消挂起的防抖（先回默认页，那里才有热词） */
+    await p.evaluate(() => { document.querySelector('[data-action="clear-query"]').click(); });
+    await p.evaluate(() => {
+      const i = document.getElementById('searchInput');
+      i.value = '道德'; i.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('[data-action="hot-word"]').click();
+    });
+    await p.waitForTimeout(300);
+    const hot = await p.evaluate(() => {
+      const h = document.querySelector('#searchBody .result-head');
+      return { val: document.getElementById('searchInput').value, head: h ? h.textContent : '' };
+    });
+    ok('AA4 点热词后结果区与输入框一致', !!hot.val && hot.head.indexOf(hot.val) >= 0, hot.val + ' / ' + hot.head);
+    await p.close();
+  }
+  {
+    /* 所有书源都停用、又没导入本地卷时，书肆首页不该抛异常白屏 */
+    const errBefore = errs.length;
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(300);
+    await p.evaluate(async () => {
+      window.MJ.sources.list().forEach((s) => window.MJ.sources.setEnabled(s.id, false));
+      await window.MJ.sources.refresh();
+      location.hash = '#/store';
+    });
+    await p.waitForTimeout(500);
+    const st = await p.evaluate(() => ({
+      quick: !!document.querySelector('.quick-cats'),
+      len: ((document.getElementById('view') || {}).textContent || '').trim().length,
+      books: window.MJ.sources.allBooks().length
+    }));
+    ok('AA5 书源全停用时书肆完整渲染', st.quick && errs.length === errBefore,
+      'quick-cats=' + st.quick + ' 剩余书=' + st.books + ' 新增错误=' + errs.slice(errBefore).join(' | '));
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(400);
+    const before = await p.evaluate(() => document.querySelectorAll('#forYou .quick-add').length);
+    await p.click('[data-action="shuffle"]');
+    await p.waitForTimeout(250);
+    const after = await p.evaluate(() => document.querySelectorAll('#forYou .quick-add').length);
+    ok('AA6 换荐后「为你荐一卷」仍保留收下按钮', before > 0 && after === before, before + ' → ' + after);
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    await p.click('[data-action="add-source"]');
+    await p.waitForTimeout(150);
+    const opened = await p.evaluate(() => !!document.getElementById('sourceModal'));
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(150);
+    const closed = await p.evaluate(() => !document.getElementById('sourceModal'));
+    ok('AA7 Esc 能关掉自定义书源弹层', opened && closed, 'opened=' + opened + ' closed=' + closed);
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(350);
+    let opened2 = false, closed2 = false, note = '';
+    try {
+      await p.click('[data-action="toggle-edit"]', { timeout: 8000 });
+      await p.waitForTimeout(150);
+      await p.click('[data-action="pick-book"]', { timeout: 8000 });
+      await p.waitForTimeout(120);
+      await p.click('[data-action="open-shelf-actions"]', { timeout: 8000 });
+      await p.waitForTimeout(150);
+      opened2 = await p.evaluate(() => !!document.getElementById('shelfActions'));
+      await p.keyboard.press('Escape');
+      await p.waitForTimeout(150);
+      closed2 = await p.evaluate(() => !document.getElementById('shelfActions'));
+    } catch (e) { note = String(e.message).split('\n')[0]; }
+    ok('AA8 Esc 能关掉藏卷批量操作面板', opened2 && closed2, 'opened=' + opened2 + ' closed=' + closed2 + ' ' + note);
+    await p.close();
+  }
+  {
+    /* 同 id 更新自定义书源：不该因 id 列表没变就误判「没有注册任何书源」 */
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    const code = (n) => "MJ.sources.register({ id:'tst:aa', name:'" + n + "', metasSync: () => [], getChapter: async () => [] });";
+    for (const n of ['甲源', '乙源']) {
+      await p.click('[data-action="add-source"]');
+      await p.waitForTimeout(120);
+      await p.fill('#sourceCode', code(n));
+      await p.click('[data-action="source-save"]');
+      await p.waitForTimeout(180);
+    }
+    const r = await p.evaluate(() => ({
+      toast: (document.getElementById('toast') || {}).textContent || '',
+      modal: !!document.getElementById('sourceModal'),
+      n: JSON.parse(localStorage.getItem('mojuan.sources.custom') || '[]').length,
+      name: (window.MJ.sources.get('tst:aa') || {}).name
+    }));
+    ok('AA9 同 id 更新书源不误报「没有注册」', r.toast.indexOf('没有注册') < 0 && !r.modal, r.toast);
+    ok('AA10 两次启用都落盘且会话内是最新代码', r.n === 2 && r.name === '乙源', r.n + ' / ' + r.name);
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

@@ -1421,22 +1421,31 @@
       <div class="book-hscroll" id="editorPick">${sorted(allBooks(), 'many').slice(0, 8).map((b) => bookCard(b, { badge: charNum(b) >= 100000 ? '长卷' : '', quickAdd: true })).join('')}</div></div>`;
     html += `<div class="section">${sectionHead('为你荐一卷', '换荐', 'shuffle')}
       <div class="book-hscroll" id="forYou">${sorted(allBooks().filter((b) => !state.shelf.includes(b.id)), 'long').slice(0, 7).map((b) => bookCard(b, { quickAdd: true })).join('')}</div></div>`;
+    /* 书源可以一个个全停掉，这时一本书都没有；原先直接解引用 daily.id 会抛异常，
+       整个 render() 断掉，书肆停在上一个页面甚至白屏。给一个能走通的空态。 */
     const pool = allBooks();
-    const daily = pool[new Date().getDate() % Math.max(1, pool.length)] || pool[0];
-    const dailyInShelf = state.shelf.includes(daily.id);
-    html += `<div class="section">${sectionHead('今日一卷', '', '')}
-      <div class="daily-card" data-action="open-book" data-id="${daily.id}">
-        <div>${coverHtml(daily)}</div>
-        <div>
-          <div class="muted" style="font-size:11px;letter-spacing:.16em">DAILY PICK · 今 日 展 卷</div>
-          <h3>${daily.title}</h3><div class="byline">${daily.author} · ${daily.category} · ${daily.words}</div>
-          <p class="desc">${daily.desc}</p>
-          <div style="display:flex;align-items:center;gap:12px">
-            <span class="score" style="font-size:20px">${chapNum(daily)}</span><span class="muted" style="font-size:12px">篇 · ${daily.words}</span>
-            <button class="btn btn-ghost btn-sm" style="margin-left:auto" data-action="${dailyInShelf ? 'open-book' : 'add-shelf'}" data-id="${daily.id}">${icon(dailyInShelf ? 'check' : 'plus', 'ic-sm')} ${dailyInShelf ? '已在藏卷' : '收入藏卷'}</button>
+    if (!pool.length) {
+      html += `<div class="section">${sectionHead('今日一卷', '', '')}
+        <div class="empty">${icon('book')}<p>书源都停用了，眼前暂时没有可荐的卷</p>
+        <div class="empty-actions"><button class="btn btn-primary" data-go="me">去墨斋启用书源</button>
+        <button class="btn btn-ghost" data-go="shelf">回藏卷</button></div></div></div>`;
+    } else {
+      const daily = pool[new Date().getDate() % pool.length];
+      const dailyInShelf = state.shelf.includes(daily.id);
+      html += `<div class="section">${sectionHead('今日一卷', '', '')}
+        <div class="daily-card" data-action="open-book" data-id="${daily.id}">
+          <div>${coverHtml(daily)}</div>
+          <div>
+            <div class="muted" style="font-size:11px;letter-spacing:.16em">DAILY PICK · 今 日 展 卷</div>
+            <h3>${daily.title}</h3><div class="byline">${daily.author} · ${daily.category} · ${daily.words}</div>
+            <p class="desc">${daily.desc}</p>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="score" style="font-size:20px">${chapNum(daily)}</span><span class="muted" style="font-size:12px">篇 · ${daily.words}</span>
+              <button class="btn btn-ghost btn-sm" style="margin-left:auto" data-action="${dailyInShelf ? 'open-book' : 'add-shelf'}" data-id="${daily.id}">${icon(dailyInShelf ? 'check' : 'plus', 'ic-sm')} ${dailyInShelf ? '已在藏卷' : '收入藏卷'}</button>
+            </div>
           </div>
-        </div>
-      </div></div>`;
+        </div></div>`;
+    }
     html += `<div class="section">${sectionHead('卷帙长短', '看卷榜', 'go-rank')}
       <div class="rank-list">${sorted(allBooks(), 'long').slice(0, 5).map((b, i) => bookRow(b, i, { rank: true })).join('')}</div></div>`;
     html += `<div class="section">${sectionHead('诸卷总览', '', '')}
@@ -1497,6 +1506,9 @@
   /* ---------- 页面：搜索 ---------- */
   let searchTimer = null;
   let catalogSearchTimer = null;
+  /* 本地导入卷的 chapters 是字符串数组，公版书是 {no,title}；搜索这两处直接读原始
+     数组，绕开了 chapterList() 的归一化，得自己把两种形态都认下来。 */
+  const chapterTitle = (c) => typeof c === 'string' ? c : String((c && c.title) || '');
   function searchMatch(q) {
     const s = q.trim().toLowerCase();
     if (!s) return [];
@@ -1506,7 +1518,7 @@
       if (hay.includes(s)) return true;
       const chs = b.chapters || [];
       for (let i = 0; i < chs.length; i++) {
-        if ((chs[i].title || '').toLowerCase().includes(s)) return true;
+        if (chapterTitle(chs[i]).toLowerCase().includes(s)) return true;
       }
       return false;
     });
@@ -1515,8 +1527,8 @@
   function searchHint(q, b) {
     const s = q.trim().toLowerCase();
     if (!s) return '';
-    const hit = (b.chapters || []).find((c) => (c.title || '').toLowerCase().includes(s));
-    return hit && !String(b.title).toLowerCase().includes(s) ? `含「${hit.title}」` : '';
+    const hit = (b.chapters || []).find((c) => chapterTitle(c).toLowerCase().includes(s));
+    return hit && !String(b.title).toLowerCase().includes(s) ? `含「${chapterTitle(hit)}」` : '';
   }
   function pageSearch() {
     let html = head('寻卷', 'SEARCH', '输入卷名、墨客或篇目名，篇目也能搜到');
@@ -5304,10 +5316,14 @@
         const ta = $('#sourceCode');
         const code = ta ? ta.value.trim() : '';
         if (!code) { toast('先写点代码'); break; }
-        const before = SRC.list().map((s) => s.id).join('|');
+        /* register 覆盖同 id 时列表长度和 id 都不变，只比 id 序列会把「更新书源」
+           误判成「没注册」，弹层不关、代码不落盘，当前会话却是新对象——重启就退回旧版。
+           改成比对象引用：新增 id 换长度，覆盖同 id 换引用。 */
+        const before = SRC.list();
         try { runSourceCode(code); } catch (e) { toast('书源代码有误：' + (e && e.message ? e.message : '未知错误')); break; }
-        const after = SRC.list().map((s) => s.id).join('|');
-        if (after === before) { toast('这段代码没有注册任何书源（需要调用 MJ.sources.register）'); break; }
+        const after = SRC.list();
+        const changed = after.length !== before.length || after.some((s, i) => s !== before[i]);
+        if (!changed) { toast('这段代码没有注册任何书源（需要调用 MJ.sources.register）'); break; }
         const list = customSources();
         list.push(code);
         saveCustomSources(list);
@@ -5522,7 +5538,7 @@
           a11ySweep(box);
         }
         const fy = $('#forYou'); if (fy) {
-          fy.innerHTML = pick(allBooks().filter((b) => !state.shelf.includes(b.id)), 7).map((b) => bookCard(b)).join('');
+          fy.innerHTML = pick(allBooks().filter((b) => !state.shelf.includes(b.id)), 7).map((b) => bookCard(b, { quickAdd: true })).join('');
           a11ySweep(fy);
         }
         /* 换荐按钮本身没被替换，焦点不用特意找回来 */
@@ -5531,12 +5547,15 @@
       case 'toggle-desc': ui.descOpen = !ui.descOpen; $('#bookDesc').classList.toggle('clamp');
         el.innerHTML = (ui.descOpen ? '收起' : '展开简介') + ' ' + icon('right', 'ic-sm'); break;
       case 'hot-word': {
+        /* 输入框刚敲过字时还挂着 120ms 的防抖，不取消就会在 120ms 后用旧词
+           把热词的结果区覆盖掉，输入框和结果长期对不上 */
+        clearTimeout(searchTimer);
         const input = $('#searchInput');
         if (input) input.value = val;
         commitSearch(val); renderSearchBody(val); break;
       }
-      case 'clear-query': { const input = $('#searchInput'); if (input) { input.value = ''; input.focus(); } renderSearchBody(''); break; }
-      case 'clear-history': state.history = []; save(); renderSearchBody(''); toast('寻卷记录已清空'); break;
+      case 'clear-query': { clearTimeout(searchTimer); const input = $('#searchInput'); if (input) { input.value = ''; input.focus(); } renderSearchBody(''); break; }
+      case 'clear-history': clearTimeout(searchTimer); state.history = []; save(); renderSearchBody(''); toast('寻卷记录已清空'); break;
       case 'set-goal':
         state.dailyGoal = Number(val) || 30; save(); rerender();
         toast('今日读墨目标设为 ' + state.dailyGoal + ' 分钟'); break;
@@ -6141,6 +6160,10 @@
     }
     if (e.key === 'Escape') {
       if ($('#shortcutHelp')) { closeShortcutHelp(); return; }
+      /* append 到 body 的模态弹层优先关：它们开着时主干是 inert，键盘用户出不去。
+         放在搜索框清空之前，否则焦点恰好在藏卷搜索框时会只清词、面板还留着。 */
+      if ($('#shelfActions')) { closeShelfActions(); return; }
+      if ($('#sourceModal')) { closeSourceEditor(); return; }
       /* 焦点在藏卷搜索框里时，Esc 只清空搜索，不去动听书或阅读器 */
       const si = $('#shelfSearch');
       if (si && si.value && document.activeElement === si) {
