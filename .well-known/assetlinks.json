@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.zztno.twa",
+      "sha256_cert_fingerprints": [
+        "C9:C5:FF:41:FA:38:63:DF:14:36:CB:A1:32:C1:B3:39:60:3D:9A:10:9F:C5:5B:E5:67:0C:C1:AB:12:29:79:E6"
+      ]
+    }
+  }
+]
