@@ -1559,6 +1559,100 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AB：书源代码异常事务 / 启动载入坏插件 / pointercancel / 音色弹层 Esc ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    await p.click('[data-action="add-source"]');
+    await p.waitForTimeout(120);
+    await p.fill('#sourceCode', "MJ.sources.register({ id:'ghost-probe', name:'幽灵源' }); throw new Error('boom');");
+    await p.click('[data-action="source-save"]');
+    await p.waitForTimeout(220);
+    const r = await p.evaluate(() => ({
+      ghost: !!(window.MJ.sources._registry && window.MJ.sources._registry.has('ghost-probe')),
+      custom: JSON.parse(localStorage.getItem('mojuan.sources.custom') || '[]').length,
+      toast: (document.getElementById('toast') || {}).textContent || ''
+    }));
+    ok('AB1 书源代码中途抛错不留幽灵源', !r.ghost, 'toast=' + r.toast);
+    ok('AB2 失败代码不写进自定义书源列表', r.custom === 0, '磁盘份数 ' + r.custom);
+    await p.close();
+  }
+  {
+    /* 启动时载入坏插件：不该污染注册表，也不该每次启动重演 */
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(300);
+    await p.evaluate(() => localStorage.setItem('mojuan.sources.custom',
+      JSON.stringify(["MJ.sources.register({ id:'ghost-boot', name:'G' }); throw new Error('boom');"])));
+    await p.reload();
+    await p.waitForFunction(() => window.MJ.sources.ready === true, null, { timeout: 12000 });
+    await p.waitForTimeout(200);
+    const r = await p.evaluate(() => ({
+      ghost: window.MJ.sources.list().some((s) => s.id === 'ghost-boot'),
+      left: JSON.parse(localStorage.getItem('mojuan.sources.custom') || '[]').length
+    }));
+    ok('AB3 启动载入坏插件不污染书源列表', !r.ghost);
+    ok('AB4 载入失败的坏代码被剔除', r.left === 0, '剩余 ' + r.left);
+    await p.close();
+  }
+  {
+    /* 系统中断手势（来电 / 切后台）：只该弹回，绝不能提交页码 */
+    const p = await newPage(browser, {
+      settings: { pageMode: 'flip', flipAnim: 'slide', fs: 26, lh: 2.8 }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForSelector('#flipPage [data-fi]', { timeout: 8000 });
+    const before = await p.evaluate(() => parseInt(document.querySelector('#flipFoot b').textContent, 10));
+    await p.evaluate(() => {
+      const body = document.getElementById('readerBody');
+      const t = document.querySelector('#flipPage [data-fi]') || document.getElementById('flipPage');
+      const r = body.getBoundingClientRect();
+      const y = r.y + r.height * 0.4;
+      const fire = (type, x, pid) => t.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: pid, pointerType: 'touch',
+        clientX: x, clientY: y, button: 0
+      }));
+      window.getSelection().removeAllRanges();
+      fire('pointerdown', 300, 1);
+      fire('pointermove', 100, 1);
+      fire('pointermove', 80, 1);
+      fire('pointercancel', 80, 1);
+    });
+    await p.waitForTimeout(450);
+    const after = await p.evaluate(() => parseInt(document.querySelector('#flipFoot b').textContent, 10));
+    ok('AB5 pointercancel 不翻页', after === before, before + ' → ' + after);
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.addInitScript(TTS_MOCK);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(650);
+    await p.click('[data-action="toggle-tts"]');
+    await p.waitForTimeout(300);
+    await p.click('[data-action="listen-panel"][data-val="voice"]');
+    await p.waitForTimeout(200);
+    const hasBtn = await p.evaluate(() => !!document.querySelector('[data-action="voice-config"]'));
+    if (hasBtn) { await p.click('[data-action="voice-config"]'); await p.waitForTimeout(200); }
+    const opened = await p.evaluate(() => !!document.getElementById('voiceModal'));
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(250);
+    const r = await p.evaluate(() => {
+      const full = document.getElementById('listen'), mini = document.getElementById('listenMini');
+      return {
+        modal: !!document.getElementById('voiceModal'),
+        full: !!(full && !full.hidden),
+        mini: !!(mini && !mini.hidden)
+      };
+    });
+    ok('AB6 Esc 能关掉在线音色配置弹层', opened && !r.modal, 'opened=' + opened + ' btn=' + hasBtn);
+    /* 听卷占屏时主干本来就该 inert，不能拿它当判据；要看的是 Esc 有没有
+       落到 listen.active 分支把朗读收成迷你条甚至停掉 */
+    ok('AB7 Esc 关弹层时不收起听卷', r.full && !r.mini, 'full=' + r.full + ' mini=' + r.mini);
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

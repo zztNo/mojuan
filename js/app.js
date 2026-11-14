@@ -794,10 +794,33 @@
     const fn = new Function('MJ', 'window', '"use strict";\n' + code);
     fn(window.MJ, window);
   }
+  /* 自定义书源是用户粘进来的任意 JS：执行到一半抛错时，前面成功的 register
+     已经改了全局注册表（带 metasSync 还会顺带污染 index）。原先只在调用处
+     catch 一句 toast，幽灵源就留在会话里、磁盘上却什么都没有。这里把
+     「执行 + 出错回滚」包成事务，保存与启动恢复走同一条路径。 */
+  function runSourceCodeSafe(code) {
+    const before = SRC.list().slice();
+    try { runSourceCode(code); }
+    catch (e) {
+      const keep = new Set(before.map((s) => s.id));
+      SRC.list().forEach((s) => { if (!keep.has(s.id)) SRC.unregister(s.id); });
+      /* 覆盖过的旧 id 换回原来的对象；register 对已存在 id 只 set，不改 order */
+      before.forEach((s) => SRC.register(s));
+      return { err: e, before, after: null };
+    }
+    return { err: null, before, after: SRC.list() };
+  }
   async function restoreCustomSources() {
-    customSources().forEach((code) => {
-      try { runSourceCode(code); } catch (e) { console.warn('[sources] 自定义书源载入失败', e); }
+    const all = customSources(), good = [];
+    all.forEach((code) => {
+      /* 老备份里可能混进非字符串的占位记录，别当代码执行、更别顺手删掉 */
+      if (typeof code !== 'string') { good.push(code); return; }
+      const r = runSourceCodeSafe(code);
+      if (r.err) console.warn('[sources] 自定义书源载入失败，已回滚', r.err);
+      else good.push(code);
     });
+    /* 坏代码一次载入失败就会次次失败，直接从列表剔掉，别每次启动都重演一遍 */
+    if (good.length !== all.length) saveCustomSources(good);
     disabledSources().forEach((id) => { if (SRC.get(id)) SRC.setEnabled(id, false); });
     await SRC.refresh();
   }
@@ -2457,7 +2480,8 @@
       const cur = d; d = null;
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       body.classList.remove('flip-dragging');
-      const raw = ev.type === 'pointerup' ? ev.clientX : cur.lastX;
+      const cancelled = ev.type === 'pointercancel';
+      const raw = cancelled ? cur.lastX : ev.clientX;
       /* 手指确实挪过位置：松手那一下的 click 不能再翻一页 / 折叠工具栏，
          否则「想往前拖但已在第一页」会反手翻到下一页 */
       if (Math.abs(raw - cur.x) > 8) {
@@ -2468,9 +2492,11 @@
       const dx = clampDx(raw - cur.x, cur.W);
       const far = Math.abs(dx) > Math.min(cur.W * 0.26, 96);
       const flick = Math.abs(cur.v) > 0.32 && Math.sign(cur.v) === Math.sign(dx);
-      /* dx 必须落在目标页那一侧（dir=1 时是负数），往回拖不管拖多远都是弹回 */
+      /* dx 必须落在目标页那一侧（dir=1 时是负数），往回拖不管拖多远都是弹回。
+         pointercancel 是系统掐断手势（来电 / 切后台 / 系统返回手势），不是用户
+         松手：只能弹回，绝不能按最后位移判定成甩页并写进度。 */
       const toward = dx * -cur.dir > 0;
-      flipDragSettle(cur.dir, dx, cur.W, toward && Math.abs(dx) > 14 && (far || flick));
+      flipDragSettle(cur.dir, dx, cur.W, !cancelled && toward && Math.abs(dx) > 14 && (far || flick));
       setTimeout(() => { ui.flipSwiped = false; }, 350);
     };
     body.addEventListener('pointerup', end);
@@ -5319,10 +5345,14 @@
         /* register 覆盖同 id 时列表长度和 id 都不变，只比 id 序列会把「更新书源」
            误判成「没注册」，弹层不关、代码不落盘，当前会话却是新对象——重启就退回旧版。
            改成比对象引用：新增 id 换长度，覆盖同 id 换引用。 */
-        const before = SRC.list();
-        try { runSourceCode(code); } catch (e) { toast('书源代码有误：' + (e && e.message ? e.message : '未知错误')); break; }
-        const after = SRC.list();
-        const changed = after.length !== before.length || after.some((s, i) => s !== before[i]);
+        const r = runSourceCodeSafe(code);
+        if (r.err) {
+          toast('书源代码有误：' + (r.err.message || '未知错误'));
+          /* 回滚只还原了注册表，index 里可能还留着半注册源 absorb 进来的书 */
+          (async () => { await SRC.refresh(); rerender(); })();
+          break;
+        }
+        const changed = r.after.length !== r.before.length || r.after.some((s, i) => s !== r.before[i]);
         if (!changed) { toast('这段代码没有注册任何书源（需要调用 MJ.sources.register）'); break; }
         const list = customSources();
         list.push(code);
@@ -6164,6 +6194,9 @@
          放在搜索框清空之前，否则焦点恰好在藏卷搜索框时会只清词、面板还留着。 */
       if ($('#shelfActions')) { closeShelfActions(); return; }
       if ($('#sourceModal')) { closeSourceEditor(); return; }
+      /* 听卷的音色配置也在 MODAL_SELS 里：不先关它，Esc 会落到下面的
+         listen.active 分支，把朗读收成迷你条甚至停掉，弹层和 inert 却还在 */
+      if ($('#voiceModal')) { closeVoiceConfig(); return; }
       /* 焦点在藏卷搜索框里时，Esc 只清空搜索，不去动听书或阅读器 */
       const si = $('#shelfSearch');
       if (si && si.value && document.activeElement === si) {
