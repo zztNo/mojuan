@@ -269,11 +269,11 @@
   const loadContent = (id) => idb('get', id);
   const deleteContent = (id) => idb('delete', id);
 
-  /* 导入本地 TXT / EPUB */
+  /* 导入本地 TXT / EPUB / HTML */
   async function importFiles(fileList) {
     if (importing) { toast('正在导入，请稍候'); return; }
     const files = Array.from(fileList || []).filter((f) => f && f.size > 0 && f.size <= 30 * 1024 * 1024);
-    if (!files.length) { toast('请选择 TXT / EPUB 文件（单卷不超过 30MB）'); return; }
+    if (!files.length) { toast('请选择 TXT / EPUB / HTML 文件（单卷不超过 30MB）'); return; }
     importing = true;
     let lastId = null, ok = 0, weakSave = 0;
     for (let fi = 0; fi < files.length; fi++) {
@@ -1894,7 +1894,7 @@
       </div></div>`;
     html += `<div class="section">${sectionHead('其他', '', '')}
       <div class="setting-list">
-        <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD，支持多选</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD / HTML，支持多选</small></div>${icon('right', 'ic-sm')}</div>
         ${state.localBooks.length ? `<div class="setting-row" data-action="go-local-list">${icon('trash')}<div class="st">整理 / 删除已导入的卷<small>已导入 ${state.localBooks.length} 本，可单本删除；藏卷里长按卷册可批量理卷</small></div>${icon('right', 'ic-sm')}</div>` : ''}
         <div class="setting-row" data-action="go-shelf">${icon('shelf')}<div class="st">管理我的藏卷</div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="open-shortcut-help">${icon('settings')}<div class="st">键盘捷径<small>按 ? 随时打开，桌面上读墨更快</small></div>${icon('right', 'ic-sm')}</div>

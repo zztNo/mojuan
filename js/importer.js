@@ -1,4 +1,4 @@
-/* 墨卷 · 本地书导入：TXT / EPUB 解析（纯浏览器，无依赖） */
+/* 墨卷 · 本地书导入：TXT / EPUB / HTML 解析（纯浏览器，无依赖） */
 (function (global) {
   'use strict';
 
@@ -299,6 +299,32 @@
     return { title, author, chapters, cover };
   }
 
+  /* HTML 导入：剥掉标签、把块级元素换成换行，让标题独占一行好让 parseTxt 的
+     章名正则认得出来；head / script / style 整块丢弃，别把样式和脚本当正文。
+     实体最后解码——顺序反了会把用户本想显示的「&lt;p&gt;」当成标签吃掉。 */
+  const HTML_ENT = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
+  function htmlToText(html) {
+    return String(html || '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/gi, '')
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '')
+      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|h[1-6]|li|tr|section|article|blockquote|pre|ul|ol|table|header|footer|dd|dt)\s*>/gi, '\n')
+      .replace(/<[^>]*>/g, '')
+      .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+        const k = e.toLowerCase();
+        if (k.charAt(0) === '#') {
+          const n = k.charAt(1) === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
+          if (!Number.isFinite(n) || n < 0 || n > 0x10FFFF) return m;
+          try { return String.fromCodePoint(n); } catch (_) { return m; }
+        }
+        return Object.prototype.hasOwnProperty.call(HTML_ENT, k) ? HTML_ENT[k] : m;
+      })
+      .replace(/\u00a0/g, ' ');
+  }
+
   async function parseFile(file) {
     const name = file.name || '本地书';
     /* 没有扩展名时 split('.') 会把整个文件名当成 ext，下面的 !ext 兜底就永远
@@ -310,8 +336,12 @@
       const r = await parseEpub(file);
       return { ext, title: r.title === '未命名' ? baseName : r.title, author: r.author, chapters: r.chapters, cover: r.cover };
     }
-    if (['txt', 'md', 'text', 'log'].includes(ext) || file.type.startsWith('text/') || !ext) {
-      const text = decode(await file.arrayBuffer());
+    /* text/html 原先被 file.type.startsWith('text/') 兜底成纯 TXT，标签经 clean()
+       换成全角后成了可见正文，章名也丢。这里单独剥一层，TXT / EPUB 路径不动。 */
+    const isHtml = ext === 'html' || ext === 'htm' || file.type === 'text/html';
+    if (isHtml || ['txt', 'md', 'text', 'log'].includes(ext) || file.type.startsWith('text/') || !ext) {
+      const raw = decode(await file.arrayBuffer());
+      const text = isHtml ? htmlToText(raw) : raw;
       const chapters = parseTxt(text);
       let title = baseName, author = '本地导入';
       /* 只在「中文书名 - 中文作者」这种明确形式下拆出作者 */
@@ -320,9 +350,9 @@
         title = mm[1].trim(); author = mm[2].trim();
       }
       title = clean(title.replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ')) || baseName;
-      return { ext, title, author, chapters };
+      return { ext: isHtml ? (ext || 'html') : ext, title, author, chapters };
     }
-    throw new Error('暂不支持 .' + ext + ' 格式，请导入 TXT 或 EPUB');
+    throw new Error('暂不支持 .' + ext + ' 格式，请导入 TXT、EPUB 或 HTML');
   }
 
   global.MJ = global.MJ || {};

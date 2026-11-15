@@ -1781,6 +1781,48 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AD：HTML 导入不再把标签当正文、不再丢章名 ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(300);
+    const r = await p.evaluate(async () => {
+      const html = '<!doctype html><html><head><title>不该进正文</title>'
+        + '<style>.x{color:red}</style></head><body>'
+        + '<h1>第一章 初遇</h1><p>关关雎鸠，在河之洲。</p>'
+        + '<p>窈窕淑女，君子好逑。</p>'
+        + '<script>var ghost = "不该进正文";</script></body></html>';
+      const res = await window.MJ.importer.parseFile(new File([html], '初遇.html', { type: 'text/html' }));
+      return {
+        ext: res.ext, first: res.chapters[0].title, n: res.chapters.length,
+        body: res.chapters.map((c) => c.paras.join('')).join('')
+      };
+    });
+    ok('AD1 HTML 标签与脚本样式不进正文',
+      !/〈(?:html|head|body|p|h1|style|script|title)/i.test(r.body) && !/不该进正文|color:red/.test(r.body),
+      r.body.slice(0, 90));
+    ok('AD2 HTML 的标题保留为章名', r.first === '第一章 初遇', r.first + ' / ' + r.n + ' 章');
+    ok('AD3 HTML 正文文本完整保留', /关关雎鸠/.test(r.body) && /窈窕淑女/.test(r.body), r.body.slice(0, 90));
+    ok('AD4 导入结果标记为 HTML 格式', r.ext === 'html', r.ext);
+
+    const r2 = await p.evaluate(async () => {
+      const html = '<div>第一段文本</div><br><div>第二段文本 &amp; 收尾</div>';
+      const res = await window.MJ.importer.parseFile(new File([html], '无标题.htm', { type: 'text/html' }));
+      return { body: res.chapters.map((c) => c.paras.join('')).join('') };
+    });
+    ok('AD5 无标题 HTML 同样剥标签并解码实体',
+      !/〈/.test(r2.body) && /第一段文本/.test(r2.body) && /第二段文本/.test(r2.body),
+      r2.body.slice(0, 80));
+
+    const r3 = await p.evaluate(async () => {
+      const res = await window.MJ.importer.parseFile(
+        new File(['第一章 初遇\n\n正文内容。'], '普通.txt', { type: 'text/plain' }));
+      return res.chapters[0].title;
+    });
+    ok('AD6 普通 TXT 章名不受影响', r3 === '第一章 初遇', r3);
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
