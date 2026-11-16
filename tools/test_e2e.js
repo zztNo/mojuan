@@ -1823,6 +1823,32 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AE：窄屏榜单页不横向溢出 ===== */
+  {
+    for (const w of [320, 360, 430]) {
+      const p = await browser.newPage({ viewport: { width: w, height: 860 } });
+      p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+      await p.addInitScript(seed, {});
+      await p.goto(FILE + '#/store/rank');
+      await p.waitForTimeout(320);
+      const r = await p.evaluate(() => {
+        const de = document.documentElement;
+        return {
+          over: de.scrollWidth - de.clientWidth,
+          w: de.clientWidth,
+          rights: Array.from(document.querySelectorAll('.rank-top3 .book-card'))
+            .map((el) => Math.round(el.getBoundingClientRect().right))
+        };
+      });
+      ok('AE ' + w + 'px 榜单页不横向溢出', r.over <= 1, '溢出 ' + r.over + 'px');
+      if (w === 320) {
+        ok('AE 前三甲卡片都在视口内', r.rights.length === 3 && r.rights.every((x) => x <= r.w + 1),
+          JSON.stringify(r.rights) + ' / 视口 ' + r.w);
+      }
+      await p.close();
+    }
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
