@@ -549,7 +549,7 @@
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
     shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
     noteSearch: '', noteBook: '', noteColor: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
-    noteMulti: false, notePicked: new Set(),
+    noteMulti: false, notePicked: new Set(), noteLimit: 200,
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
     bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
     tocLoading: false, tocFailed: false, tocOffline: false, storageFull: false
@@ -1842,8 +1842,11 @@
             `<button class="hl-dot hl-${k}" data-action="note-bulk-color" data-val="${k}" title="改为${l}" aria-label="改为${l}"></button>`).join('')}</span>
           <button class="btn btn-ghost btn-sm btn-danger" data-action="note-bulk-del">${icon('trash', 'ic-sm')} 删除</button>
         </div>` : ''}
-        <div class="setting-list">
-          ${annAll.map(({ bid, a, i }) => {
+        <div class="setting-list" id="noteList">
+          ${(function noteRows() {
+            /* 一次只渲染一批，避免几万条笔记堆出十万个 DOM 节点。
+               筛选命中落在批次外时，applyNoteFilter() 会扩 ui.noteLimit 重渲染。 */
+            return annAll.slice(0, ui.noteLimit).map(({ bid, a, i }) => {
             const bt = (getBook(bid) || {}).title || '已删除的卷';
             const frag = a.text.length > 42 ? a.text.slice(0, 42) + '…' : a.text;
             const hay = (bt + ' ' + a.text + ' ' + (a.note || '') + ' 第' + a.ch + '章').toLowerCase();
@@ -1854,8 +1857,10 @@
               <div class="st" style="cursor:pointer" data-action="open-annotation" data-id="${esc(bid)}" data-val="${i}">《${esc(bt)}》<small><i class="ann-dot hl-${esc(a.color || 'red')}"></i>${esc(frag)}${a.note ? ' · 批注：' + esc(a.note) : ''} · 第 ${a.ch} 章</small></div>
               <button class="btn btn-ghost btn-sm btn-danger" data-action="annotation-del-global" data-id="${esc(bid)}" data-val="${i}">删除</button>
             </div>`;
-          }).join('')}
+            }).join('');
+          })()}
         </div>
+        ${annAll.length > ui.noteLimit ? `<button class="btn btn-ghost note-more" data-action="note-more">还有 ${annAll.length - ui.noteLimit} 条 · 显示更多</button>` : ''}
         <div id="noteNoMatch" class="cat-empty" hidden>没有匹配的笔记<br><small>换个词，或把「按卷」切回全部卷</small></div></div>`;
     }
     html += `<div class="section">${sectionHead('卷档管理', '', '')}
@@ -2737,6 +2742,29 @@
       el.hidden = !hit;
       if (hit) shown += 1;
     });
+    /* 笔记列表按批渲染，命中可能落在还没渲染的后面几百条里。当前批次一条都没中
+       时去全量找一遍；真有命中就把 limit 放到覆盖它，重渲染后本函数会再跑一次，
+       那时 shown>0 便不再扩张，不会递归。 */
+    if (!shown && (q || bk || col)) {
+      let total = 0, hitTotal = 0;
+      Object.keys(state.annotations || {}).forEach((bid) => {
+        (state.annotations[bid] || []).forEach((a) => {
+          total += 1;
+          if ((bk && bid !== bk) || (col && (a.color || 'red') !== col)) return;
+          const bt = (getBook(bid) || {}).title || '已删除的卷';
+          const hay = (bt + ' ' + a.text + ' ' + (a.note || '') + ' 第' + a.ch + '章').toLowerCase();
+          if (!q || hay.includes(q)) hitTotal += 1;
+        });
+      });
+      if (hitTotal && ui.noteLimit < total) {
+        ui.noteLimit = total;
+        const pos = ($('#noteSearch') || {}).selectionStart;
+        rerender();
+        const inp = $('#noteSearch');
+        if (inp) { inp.focus({ preventScroll: true }); if (pos != null) inp.setSelectionRange(pos, pos); }
+        return;
+      }
+    }
     const nm = $('#noteNoMatch'); if (nm) nm.hidden = shown > 0;
     const clr = $('.shelf-search-clear'); if (clr) clr.hidden = !ui.noteSearch;
     if (ui.noteMulti) {
@@ -5508,6 +5536,16 @@
         const inp = $('#noteSearch');
         if (inp) { inp.value = ''; inp.focus(); }
         ui.noteSearch = ''; applyNoteFilter();
+        break;
+      }
+      case 'note-more': {
+        /* 只多渲染一批，几十万条也不会一次堆出十万个节点 */
+        ui.noteLimit += 200;
+        const was = restorableFocus();
+        rerender();
+        const inp = $('#noteSearch');
+        if (inp) { inp.focus({ preventScroll: true }); inp.setSelectionRange(inp.value.length, inp.value.length); }
+        else if (was) { const again = resolveFocus(was); if (again) again.focus({ preventScroll: true }); }
         break;
       }
       case 'open-shelf-actions': openShelfActions(); break;

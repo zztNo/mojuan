@@ -1875,6 +1875,70 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AG：海量笔记首屏不卡死（分批渲染） ===== */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.addInitScript(() => {
+      const ann = {};
+      for (let i = 0; i < 20000; i++) {
+        (ann.shijing = ann.shijing || []).push({
+          text: '第' + i + '条划线内容', note: '', ch: 1 + (i % 10), pi: i,
+          color: ['red', 'jade', 'gold'][i % 3], time: i
+        });
+      }
+      localStorage.setItem('mojuan.state.v1', JSON.stringify({
+        v: 5, shelf: ['shijing'], settings: {}, progress: {}, annotations: ann
+      }));
+    });
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(500);
+    const first = await p.evaluate(() => ({
+      rows: document.querySelectorAll('[data-note-item]').length,
+      dom: document.getElementsByTagName('*').length,
+      more: !!document.querySelector('[data-action="note-more"]')
+    }));
+    ok('AG1 两万条笔记首屏只渲染一批', first.rows <= 300 && first.dom < 3000,
+      first.rows + ' 行 / ' + first.dom + ' 节点');
+    ok('AG2 提供「显示更多」入口', first.more);
+    /* 展开一批后数量增加，但总量仍受控 */
+    await p.click('[data-action="note-more"]');
+    await p.waitForTimeout(150);
+    const more = await p.evaluate(() => document.querySelectorAll('[data-note-item]').length);
+    ok('AG3 显示更多能追加下一批', more > first.rows && more <= first.rows + 300,
+      first.rows + ' → ' + more);
+    await p.close();
+  }
+  {
+    /* 命中落在未渲染的批次里：搜索必须找得到，且焦点不能被重渲染冲掉 */
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.addInitScript(() => {
+      const ann = {};
+      for (let i = 0; i < 20000; i++) {
+        (ann.shijing = ann.shijing || []).push({
+          text: '第' + i + '条' + (i === 19999 ? '独门关键词' : '普通内容'),
+          note: '', ch: 1, pi: i, color: 'red', time: 1
+        });
+      }
+      localStorage.setItem('mojuan.state.v1', JSON.stringify({
+        v: 5, shelf: ['shijing'], settings: {}, progress: {}, annotations: ann
+      }));
+    });
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(500);
+    await p.fill('#noteSearch', '独门关键词');
+    await p.waitForTimeout(400);
+    const r = await p.evaluate(() => ({
+      visible: Array.from(document.querySelectorAll('[data-note-item]')).filter((el) => !el.hidden).length,
+      noMatch: !document.getElementById('noteNoMatch').hidden,
+      focus: document.activeElement.id
+    }));
+    ok('AG4 批次外的命中也能搜到', r.visible === 1 && !r.noMatch, JSON.stringify(r));
+    ok('AG5 扩批重渲染后焦点回到搜索框', r.focus === 'noteSearch', r.focus);
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

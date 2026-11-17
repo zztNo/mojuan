@@ -1178,6 +1178,8 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .hl-edit .hl-note { left: auto; right: 0; }
 /* ---------- 笔记批量整理 ---------- */
 .note-color-row { margin: 9px 0 2px; }
+/* 笔记分批展开：按钮贴在列表下方居中，别让「显示更多」看起来像一条笔记 */
+.note-more { display: block; width: calc(100% - 40px); margin: 12px 20px 0; }
 .note-color-row .chip:disabled { opacity: .38; cursor: default; }
 .note-color-row .chip:disabled:hover { color: var(--ink-2); border-color: var(--line); }
 .note-multi-bar {
