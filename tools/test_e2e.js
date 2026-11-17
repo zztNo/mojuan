@@ -1989,6 +1989,40 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AJ：重复导入同一文件不产生副本 ===== */
+  {
+    const p = await newPage(browser, { localBooks: [], shelf: [] }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(300);
+    const files = Array.from({ length: 5 }, () => ({
+      name: '同一本书.txt', mimeType: 'text/plain',
+      buffer: Buffer.from('第一章 初遇\n\n' + '关关雎鸠，在河之洲。'.repeat(300))
+    }));
+    await p.locator('#fileInput').setInputFiles(files);
+    await p.waitForTimeout(1200);
+    const r = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1'));
+      return { books: s.localBooks.length, shelf: s.shelf.length };
+    });
+    ok('AJ1 同一文件重复导入只留一本', r.books === 1 && r.shelf === 1, JSON.stringify(r));
+    await p.close();
+  }
+  {
+    /* 同名但正文不同：不能误判成重复 */
+    const p = await newPage(browser, { localBooks: [], shelf: [] }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(300);
+    const files = [
+      { name: '同名.txt', mimeType: 'text/plain', buffer: Buffer.from('第一章 初遇\n\n' + '甲'.repeat(600)) },
+      { name: '同名.txt', mimeType: 'text/plain', buffer: Buffer.from('第一章 初遇\n\n' + '乙'.repeat(900)) }
+    ];
+    await p.locator('#fileInput').setInputFiles(files);
+    await p.waitForTimeout(1000);
+    const r = await p.evaluate(() => JSON.parse(localStorage.getItem('mojuan.state.v1')).localBooks.length);
+    ok('AJ2 同名但内容不同仍各自导入', r === 2, r + ' 本');
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

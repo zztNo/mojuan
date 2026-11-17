@@ -269,13 +269,20 @@
   const loadContent = (id) => idb('get', id);
   const deleteContent = (id) => idb('delete', id);
 
+  /* 本地卷去重指纹：只用元数据，老备份里没有 fingerprint 的卷也能按同样规则重算。
+     正文不进指纹——同一个文件重导字数一致，不同版本字数/章名通常不同。 */
+  function localFingerprint(title, author, words, chapterTitles) {
+    return [title, author, words, (chapterTitles || []).length,
+      String((chapterTitles || [])[0] || '')].join('\u0001');
+  }
+
   /* 导入本地 TXT / EPUB / HTML */
   async function importFiles(fileList) {
     if (importing) { toast('正在导入，请稍候'); return; }
     const files = Array.from(fileList || []).filter((f) => f && f.size > 0 && f.size <= 30 * 1024 * 1024);
     if (!files.length) { toast('请选择 TXT / EPUB / HTML 文件（单卷不超过 30MB）'); return; }
     importing = true;
-    let lastId = null, ok = 0, weakSave = 0;
+    let lastId = null, ok = 0, weakSave = 0, duplicate = 0;
     for (let fi = 0; fi < files.length; fi++) {
       const f = files[fi];
       const short = f.name.replace(/\.[^.]+$/, '').slice(0, 12);
@@ -296,10 +303,23 @@
           (c) => ({ '<': '〈', '>': '〉', '&': '＆' }[c]));
         const bookTitle = cleanMeta(r.title || short);
         const bookAuthor = cleanMeta(r.author || '本地导入');
+        /* 重复拖同一个文件不该堆出几本一模一样的卷：每本都带完整正文副本写进
+           IndexedDB，重试几次就把配额吃掉。用书名+作者+字数+章数+首章名做指纹，
+           对老备份里没有 fingerprint 字段的卷也能按同样规则重算比对。 */
+        const words = chars >= 10000 ? (chars / 10000).toFixed(1) + '万' : chars + '字';
+        const dupKey = localFingerprint(bookTitle, bookAuthor, words, chapters.map((c) => c.title));
+        const dup = (state.localBooks || []).find((old) => old.local
+          && (old.fingerprint || localFingerprint(old.title, old.author, old.words, old.chapters || [])) === dupKey);
+        if (dup) {
+          duplicate += 1;
+          toast('《' + bookTitle + '》已在藏卷里，这次跳过了');
+          continue;
+        }
         const meta = {
+          fingerprint: dupKey,
           id, local: true, title: bookTitle, author: bookAuthor,
           category: '本地', status: '本地', tags: ['本地导入', (r.ext || 'txt').toUpperCase()],
-          words: chars >= 10000 ? (chars / 10000).toFixed(1) + '万' : chars + '字',
+          words,
           score: 9.0, readers: '本地卷', hot: 60,
           motif: LOCAL_MOTIFS[ok % LOCAL_MOTIFS.length], color: pal[0], color2: pal[1],
           seal: bookTitle.replace(/[《》\s]/g, '').charAt(0) || '卷',
@@ -323,6 +343,7 @@
     if (ok) {
       renderNav(ui.nav);
       toast('已导入 ' + ok + ' 卷 · 藏卷现共 ' + state.shelf.length + ' 卷' +
+        (duplicate ? ' · 跳过 ' + duplicate + ' 本重复' : '') +
         (weakSave ? '（' + weakSave + ' 卷当前环境无法长期保存）' : ''));
       go('book/' + lastId);
     }
