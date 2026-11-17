@@ -620,8 +620,13 @@
       if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
       /* <ul> 的直接子元素只能是 listitem：给 li 套 role=button 会让读屏把
          整组目录从列表里摘掉，axe 也报 aria-allowed-role + list 两条违规。
-         li 保留原生语义，靠 tabindex + 下面的 Enter/空格分派照样能操作。 */
-      if (!el.hasAttribute('role') && el.tagName !== 'LI') el.setAttribute('role', 'button');
+         书卡这类容器里还嵌着原生「收下」按钮，自己再当 role=button 就成了
+         嵌套交互（axe 报 124 处），读屏用户按 Tab 会撞上两个重叠的按钮。
+         这两种都只补 tabindex、不加 role，键盘 Enter/空格靠下面的分派照常工作。 */
+      const hasFocusableChild = !!el.querySelector('button, a, input, select, textarea, [tabindex]');
+      if (!el.hasAttribute('role') && el.tagName !== 'LI' && !hasFocusableChild) {
+        el.setAttribute('role', 'button');
+      }
       /* 书卡、设置行整块都是文字，读屏自然能读出名字；
          封面这种只有两三个字甚至没有字的可点块，合成一个完整的名字。 */
       const txt = (el.textContent || '').trim();
@@ -1242,7 +1247,7 @@
       ${opts.rank ? `<div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>` : ''}
       <div style="width:62px;flex:none">${coverHtml(b)}</div>
       <div class="book-row-info">
-        <h3>${markText(b.title, opts.mark)} <span class="muted" style="font-size:11px;font-weight:400">/ ${markText(b.author, opts.mark)}</span></h3>
+        <h3 role="heading" aria-level="2">${markText(b.title, opts.mark)} <span class="muted" style="font-size:11px;font-weight:400">/ ${markText(b.author, opts.mark)}</span></h3>
         <p>${opts.hint ? `<b style="color:var(--cinnabar);font-weight:500">${esc(opts.hint)}</b> ` : ''}${esc(b.desc)}</p>
         <div class="row-tags"><span class="tag tag-red">${esc(b.status)}</span><span class="tag">${esc(b.category)}</span>
           <span class="tag">${esc(b.words)}</span><span class="tag">${chapNum(b)} 篇</span>${miniTags(b)}</div>
@@ -1572,14 +1577,14 @@
   function renderSearchBody(q) {
     const box = $('#searchBody'); if (!box) return;
     if (!q.trim()) {
-      box.innerHTML = `<div class="search-block"><h3>${icon('clock', 'ic-sm')} 最近寻过
+      box.innerHTML = `<div class="search-block"><h3 role="heading" aria-level="2">${icon('clock', 'ic-sm')} 最近寻过
           <button class="link-more" style="margin-left:auto" data-action="clear-history">清空</button></h3>
         <div class="history-chips">${state.history.length ? state.history.map((h) =>
           `<button class="chip" data-action="hot-word" data-val="${esc(h)}">${esc(h)}</button>`).join('') : '<span class="muted" style="font-size:12.5px">还没有寻卷记录</span>'}</div></div>
-        <div class="search-block"><h3>${icon('search', 'ic-sm')} 不妨从这里找</h3>
+        <div class="search-block"><h3 role="heading" aria-level="2">${icon('search', 'ic-sm')} 不妨从这里找</h3>
         <div class="hot-list">${D.HOT_SEARCH.map((h, i) =>
           `<div class="hot-item" data-action="hot-word" data-val="${esc(h)}"><i>${i + 1}</i><span>${esc(h)}</span></div>`).join('')}</div></div>
-        <div class="search-block"><h3>${icon('book', 'ic-sm')} 或许你会喜欢</h3>
+        <div class="search-block"><h3 role="heading" aria-level="2">${icon('book', 'ic-sm')} 或许你会喜欢</h3>
         <div class="book-grid">${allBooks().slice(0, 6).map((b) => bookCard(b)).join('')}</div></div>`;
       a11ySweep(box);
       return;
@@ -1644,7 +1649,7 @@
     </div>`;
     html += `<div class="detail-cols">
       <div class="panel" id="tocPanel">
-        <h3>目录 <button class="link-more" data-action="open-catalog" data-id="${b.id}">全部 ${chapters.length} 章 ${icon('right', 'ic-sm')}</button></h3>
+        <h3 role="heading" aria-level="2">目录 <button class="link-more" data-action="open-catalog" data-id="${b.id}">全部 ${chapters.length} 章 ${icon('right', 'ic-sm')}</button></h3>
         ${b.online && chapters.length <= 1
           ? (ui.tocLoading ? tocLoadingHtml()
             : (ui.tocFailed ? `<div class="toc-status">${icon('info', 'ic-sm')} ${ui.tocOffline ? '现在没有网络，连上后点重试' : '目录没取回来'}
@@ -1654,7 +1659,7 @@
           `<li data-action="open-chapter" data-id="${b.id}" data-ch="${i + 1}"><span style="color:var(--ink-2)">${c.title}</span><span>${i === 0 ? '卷首' : ''}</span></li>`).join('')}</ul>`}
       </div>
       <div class="panel">
-        <h3>关于此卷</h3>
+        <h3 role="heading" aria-level="2">关于此卷</h3>
         ${b.local
           ? `<div class="review"><p>这卷由本地文件导入，正文保存在此设备的浏览器数据库中，不会上传到任何服务器。章节按文件原有标记划分，读墨进度与排版设置和内置卷一致。不想保留时可用上方「弃卷」移除。</p>
               <button class="btn btn-ghost btn-sm" data-action="edit-local" data-id="${b.id}">${icon('brush', 'ic-sm')} 编辑卷名 / 作者</button></div>`

@@ -1939,6 +1939,56 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AH：书卡无嵌套交互（读屏可访问性） ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/store');
+    await p.waitForTimeout(350);
+    await p.addScriptTag({ path: require('path').join(__dirname, 'axe.min.js') });
+    const c = await p.evaluate(async () => {
+      const r = await window.axe.run(document, { runOnly: ['nested-interactive'] });
+      return r.violations.reduce((n, v) => n + v.nodes.length, 0);
+    });
+    ok('AH1 书肆页无嵌套交互违规', c === 0, c + ' 处');
+    /* 键盘仍要能打开书：Tab 到卡片按回车 */
+    const opened = await p.evaluate(async () => {
+      const card = document.querySelector('#editorPick .book-card');
+      if (!card) return false;
+      card.focus();
+      card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((r) => setTimeout(r, 200));
+      return location.hash.indexOf('#/book/') === 0;
+    });
+    ok('AH2 书卡键盘回车仍能打开书', opened);
+    await p.close();
+  }
+
+  /* ===== AI：标题层级与 reader landmark ===== */
+  {
+    for (const [name, route] of [['search', '#/search'], ['book', '#/book/shijing'], ['store', '#/store']]) {
+      const p = await newPage(browser, {}, errs);
+      await p.goto(FILE + route);
+      await p.waitForTimeout(350);
+      await p.addScriptTag({ path: require('path').join(__dirname, 'axe.min.js') });
+      const n = await p.evaluate(async () => {
+        const r = await window.axe.run(document, { runOnly: ['heading-order'] });
+        return r.violations.reduce((x, v) => x + v.nodes.length, 0);
+      });
+      ok('AI ' + name + ' 页标题层级连续', n === 0, n + ' 处跳级');
+      await p.close();
+    }
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(700);
+    await p.addScriptTag({ path: require('path').join(__dirname, 'axe.min.js') });
+    const n = await p.evaluate(async () => {
+      const r = await window.axe.run(document, { runOnly: ['region'] });
+      return r.violations.reduce((x, v) => x + v.nodes.length, 0);
+    });
+    ok('AI reader 页内容都在 landmark 内', n === 0, n + ' 处游离内容');
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
