@@ -1849,6 +1849,32 @@ const TTS_MOCK = () => {
     }
   }
 
+  /* ===== AF：读屏可访问性（语速面板对比度 / 目录列表语义） ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    await p.addScriptTag({ path: require('path').join(__dirname, 'axe.min.js') });
+    const c = await p.evaluate(async () => {
+      const r = await window.axe.run(document, { runOnly: ['color-contrast'] });
+      return r.violations.reduce((n, v) => n + v.nodes.length, 0);
+    });
+    ok('AF1 墨斋页面无对比度不足的文字', c === 0, c + ' 处未达 4.5:1');
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/book/shijing');
+    await p.waitForTimeout(350);
+    const r = await p.evaluate(() => {
+      const lis = Array.from(document.querySelectorAll('#tocPanel .chapter-preview li'));
+      return { n: lis.length, roles: lis.map((el) => el.getAttribute('role')) };
+    });
+    ok('AF2 目录条目的 role 不与 listitem 语义冲突',
+      r.n > 0 && r.roles.every((x) => !x || x === 'listitem'), JSON.stringify(r.roles));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

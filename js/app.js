@@ -618,7 +618,10 @@
       if (NATIVE_CTL.test(el.tagName)) return;
       el.dataset.a11y = '1';
       if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
-      if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+      /* <ul> 的直接子元素只能是 listitem：给 li 套 role=button 会让读屏把
+         整组目录从列表里摘掉，axe 也报 aria-allowed-role + list 两条违规。
+         li 保留原生语义，靠 tabindex + 下面的 Enter/空格分派照样能操作。 */
+      if (!el.hasAttribute('role') && el.tagName !== 'LI') el.setAttribute('role', 'button');
       /* 书卡、设置行整块都是文字，读屏自然能读出名字；
          封面这种只有两三个字甚至没有字的可点块，合成一个完整的名字。 */
       const txt = (el.textContent || '').trim();
@@ -6271,10 +6274,11 @@
       e.preventDefault(); openShortcutHelp(); return;
     }
     if ($('#shortcutHelp')) return; /* 说明浮层是模态，开着时吞掉其它键 */
-    /* div/li 补成按钮之后，回车与空格还得能真的按下去 */
+    /* div 补成 button、li 保留 listitem 但补了 tabindex，两者回车/空格都得能按下去 */
     const act = document.activeElement;
     if (act && !NATIVE_CTL.test(act.tagName) && act.dataset && act.dataset.action
-      && act.getAttribute('role') === 'button' && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) {
+      && (act.getAttribute('role') === 'button' || act.hasAttribute('tabindex'))
+      && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) {
       e.preventDefault();
       act.click();
       return;

@@ -662,8 +662,10 @@ img, svg { display: block; }
 .rs-pill.active { border-color: var(--cinnabar); color: var(--cinnabar); background: var(--cinnabar-soft); }
 /* 朗读语速滑杆 0.5× ~ 3× */
 .rate-box { flex: 1; min-width: 0; font-family: var(--font-ui); }
-.rate-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 1px; font-size: 11px; opacity: .62; }
-.rate-val { font-family: var(--font-serif); font-size: 17px; font-weight: 700; color: var(--cinnabar); opacity: 1; letter-spacing: .02em; }
+/* 别用 opacity 淡化整行：它会被 .rate-val 继承，把朱砂读数冲到 2.88:1
+   （AA 要 4.5）。改用 ink-2 直接定色，读数保持朱砂原色不淡化。 */
+.rate-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 1px; font-size: 11px; color: var(--ink-2); }
+.rate-val { font-family: var(--font-serif); font-size: 17px; font-weight: 700; color: var(--cinnabar); letter-spacing: .02em; }
 .rate-range {
   -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 24px;
   margin: 0; background: none; cursor: pointer; touch-action: none; outline: none; color: inherit;
@@ -685,7 +687,7 @@ img, svg { display: block; }
 .rate-range::-moz-range-track { height: 5px; border-radius: 5px; background: color-mix(in srgb, currentColor 16%, transparent); }
 .rate-range::-moz-range-progress { height: 5px; border-radius: 5px; background: var(--cinnabar); }
 .rate-range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--cinnabar); border: 2px solid var(--reader-bg, var(--paper-2)); }
-.rate-scale { display: flex; justify-content: space-between; margin-top: -3px; font-size: 10px; opacity: .55; }
+.rate-scale { display: flex; justify-content: space-between; margin-top: -3px; font-size: 10px; color: var(--ink-2); }
 .rate-presets { display: flex; gap: 6px; margin-top: 9px; }
 .rate-preset {
   flex: 1; min-width: 0; padding: 5px 3px; border-radius: 7px; font-size: 11px; white-space: nowrap;
