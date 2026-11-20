@@ -1,6 +1,6 @@
-// content-hash: be5f2cd2b496
+// content-hash: c3ffbb6e6225
 /* 墨卷 · 离线缓存 */
-const CACHE = 'mojuan-v96';
+const CACHE = 'mojuan-v97';
 const ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const ASSETS = [
   './js/classics.js',
   './js/wikisource-clean.js',
   './js/source-wikisource.js',
+  './js/source-kit.js',
   './js/voices.js',
   './js/importer.js',
   './js/app.js',

@@ -741,6 +741,11 @@ img, svg { display: block; }
 .mm-body textarea:focus { border-color: var(--cinnabar); }
 .mini-modal .ce-foot { flex-wrap: wrap; }
 .mm-hint { margin: 0; font-size: 11.5px; line-height: 1.75; color: var(--ink-3); }
+/* 可视化书源表单字段多，弹层内部滚动，别把保存按钮挤出屏幕 */
+.source-form { display: flex; flex-direction: column; min-height: 0; }
+.source-form .mm-body { overflow-y: auto; min-height: 0; gap: 12px; }
+.source-form .mm-body .mm-hint { margin: -6px 0 2px; }
+.source-form .link-more { align-self: flex-start; }
 /* 书城页签：推荐 / 分类 / 榜单 */
 .store-tabs {
   display: flex; gap: 5px; margin: -2px 0 20px; padding: 5px;

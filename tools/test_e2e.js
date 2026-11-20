@@ -1542,7 +1542,7 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(350);
     const code = (n) => "MJ.sources.register({ id:'tst:aa', name:'" + n + "', metasSync: () => [], getChapter: async () => [] });";
     for (const n of ['甲源', '乙源']) {
-      await p.click('[data-action="add-source"]');
+      await p.click('[data-action="add-source-js"]');
       await p.waitForTimeout(120);
       await p.fill('#sourceCode', code(n));
       await p.click('[data-action="source-save"]');
@@ -1564,7 +1564,7 @@ const TTS_MOCK = () => {
     const p = await newPage(browser, {}, errs);
     await p.goto(FILE + '#/me');
     await p.waitForTimeout(350);
-    await p.click('[data-action="add-source"]');
+    await p.click('[data-action="add-source-js"]');
     await p.waitForTimeout(120);
     await p.fill('#sourceCode', "MJ.sources.register({ id:'ghost-probe', name:'幽灵源' }); throw new Error('boom');");
     await p.click('[data-action="source-save"]');
@@ -2020,6 +2020,50 @@ const TTS_MOCK = () => {
     await p.waitForTimeout(1000);
     const r = await p.evaluate(() => JSON.parse(localStorage.getItem('mojuan.state.v1')).localBooks.length);
     ok('AJ2 同名但内容不同仍各自导入', r === 2, r + ' 本');
+    await p.close();
+  }
+
+  /* ===== AK：可视化书源配置 ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    await p.click('[data-action="add-source"]');
+    await p.waitForTimeout(200);
+    const hasForm = await p.evaluate(() => ['sfId', 'sfName', 'sfListUrl', 'sfBookList', 'sfContent']
+      .every((id) => !!document.getElementById(id)));
+    ok('AK1 可视化表单字段齐全', hasForm);
+    await p.fill('#sfId', 'viz-test');
+    await p.fill('#sfName', '测试可视化源');
+    await p.fill('#sfGroup', '公版');
+    /* 用存在的同源文件，避免测试里 refresh() fetch 外部站触发 CORS 噪声 */
+    await p.fill('#sfListUrl', FILE);
+    await p.fill('#sfBookList', '.book-item');
+    await p.fill('#sfBookTitle', 'h3 a');
+    await p.fill('#sfBookLink', 'a@href');
+    await p.click('[data-action="source-form-save"]');
+    await p.waitForTimeout(500);
+    const r = await p.evaluate((url) => {
+      const s = window.MJ.sources.get('viz-test');
+      const saved = JSON.parse(localStorage.getItem('mojuan.sources.custom') || '[]');
+      return { ok: !!s, name: s && s.name, group: s && s.group,
+        cfg: !!(s && s._cfg && s._cfg.listUrl === url),
+        saved: saved.some((c) => c.indexOf('/* mj-visual:viz-test */') === 0) };
+    }, FILE);
+    ok('AK2 表单保存后书源注册成功', r.ok && r.name === '测试可视化源' && r.group === '公版', JSON.stringify(r));
+    ok('AK3 配置落到本地存储带标记', r.cfg && r.saved, JSON.stringify(r));
+    /* 再进墨斋：书源列表能看到编辑按钮与分组 */
+    await p.evaluate(() => { location.hash = '#/shelf'; });
+    await p.waitForTimeout(200);
+    await p.evaluate(() => { location.hash = '#/me'; });
+    await p.waitForTimeout(400);
+    const list = await p.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('.setting-row'))
+        .find((el) => el.textContent.indexOf('测试可视化源') >= 0);
+      return { row: !!row, edit: !!(row && row.querySelector('[data-action="source-edit"]')),
+        group: !!(row && row.textContent.indexOf('公版') >= 0) };
+    });
+    ok('AK4 书源列表显示编辑入口与分组', list.row && list.edit && list.group, JSON.stringify(list));
     await p.close();
   }
 

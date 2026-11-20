@@ -871,6 +871,54 @@
       </div>`;
   }
   function closeSourceEditor() { const m = $('#sourceModal'); if (m) m.remove(); }
+  /* A2：可视化书源配置。不预置任何站点，只让用户填地址与选择器。
+     保存时生成调用 MJ.sourceKit 的标准插件代码，复用原有的注册 / 回滚 / 备份链路。 */
+  function openSourceForm(editId) {
+    const old = editId ? SRC.get(editId) : null;
+    const c = (old && old._cfg) || {};
+    let root = $('#sourceModal');
+    if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+    const f = (id, label, val, hint, ph) => `<label>${label}<input id="${id}" value="${esc(val || '')}" placeholder="${esc(ph || '')}" spellcheck="false"></label>${hint ? `<p class="mm-hint">${hint}</p>` : ''}`;
+    root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+      <div class="cover-editor mini-modal source-form">
+        <div class="ce-head"><h3>${editId ? '编辑书源' : '添加书源（可视化）'}</h3>
+          <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+        <div class="mm-body">
+          ${f('sfId', '标识 ID（英文/数字，唯一）', c.id || '', '', 'my-src-1')}
+          ${f('sfName', '书源名称', c.name || '', '', '我的书库')}
+          ${f('sfGroup', '分组', c.group || '', '同一分组的书源可在列表里归在一起。', '自定义')}
+          ${f('sfListUrl', '书单页地址', c.listUrl || '', '填入一个网页地址，书源会从这里抓书名与链接。目标站必须允许浏览器跨域访问，否则取不到内容。', 'https://example.com/books')}
+          ${f('sfBookList', '书单条目选择器', c.bookList || '', 'CSS 选择器，匹配书单里的每一本书，如 .book-item 或 li.row。', '.book-item')}
+          ${f('sfBookTitle', '书名选择器', c.bookTitle || '', '相对每条书目的选择器，留空则取条目文字。', 'h3 a')}
+          ${f('sfBookLink', '书链选择器', c.bookLink || '', '取 href 属性，写成 a@href。', 'a@href')}
+          ${f('sfChapterList', '章节列表选择器', c.chapterList || '', '书页里每一章链接的选择器。', '.chapter-list a')}
+          ${f('sfContent', '正文选择器', c.content || '', '章节页里正文容器的选择器。', '#content')}
+          ${f('sfAuthor', '默认作者', c.defaultAuthor || '', '书单里取不到作者时用它兜底。', '网络书源')}
+          ${f('sfReplace', '正文清理正则（可选）', c.replaceRegex || '', '匹配到的内容会被删掉，如 广告|免责声明。', '')}
+          <p class="mm-hint">本功能只提供一个通用抓取框架，不内置也不推荐任何站点。请仅用于公有领域、开放获取或你自己有权使用的资源；能否读取取决于目标站是否允许跨域访问。</p>
+          <button class="link-more" data-action="source-switch-js">改用 JS 代码编辑</button>
+        </div>
+        <div class="ce-foot"><div></div>
+          <button class="btn btn-ghost" data-action="source-close">取消</button>
+          <button class="btn btn-primary" data-action="source-form-save">保存并启用</button>
+        </div>
+      </div>`;
+    a11ySweep(root);
+  }
+  function sourceCodeFromForm() {
+    const g = (id) => ($('#' + id) || {}).value || '';
+    const cfg = {
+      id: g('sfId').trim(), name: g('sfName').trim(), group: g('sfGroup').trim(),
+      desc: '可视化书源', listUrl: g('sfListUrl').trim(), bookList: g('sfBookList').trim(),
+      bookTitle: g('sfBookTitle').trim(), bookLink: g('sfBookLink').trim(),
+      chapterList: g('sfChapterList').trim(), content: g('sfContent').trim(),
+      defaultAuthor: g('sfAuthor').trim(), replaceRegex: g('sfReplace').trim()
+    };
+    if (!cfg.id || !cfg.name) throw new Error('标识 ID 与书源名称必填');
+    if (!/^[a-zA-Z0-9_-]+$/.test(cfg.id)) throw new Error('标识 ID 只能用英文、数字、下划线和短横线');
+    if (cfg.replaceRegex) { try { new RegExp(cfg.replaceRegex); } catch (e) { throw new Error('清理正则写错了'); } }
+    return { cfg, code: '/* mj-visual:' + cfg.id + ' */MJ.sources.register(MJ.sourceKit.makeSource(' + JSON.stringify(cfg) + '));' };
+  }
   function renderCoverEditor() {
     const cd = ui.coverDraft; if (!cd) return;
     const b = getBook(cd.id); if (!b) return;
@@ -1918,13 +1966,18 @@
       <div class="setting-list">
         ${SRC.list().map((s) => {
           const n = SRC.allBooks().filter((b) => b.sourceId === s.id).length;
+          const group = s.group ? ' · ' + esc(s.group) : '';
+          const dup = (s._cfg && s._cfg.listUrl)
+            ? SRC.list().filter((x) => x !== s && x._cfg && x._cfg.listUrl === s._cfg.listUrl).length : 0;
           return `<div class="setting-row">
             ${icon(s.online ? 'store' : 'book')}
-            <div class="st">${esc(s.name)}<small>${esc(s.desc)} · 现有 ${n} 卷${s.online ? ' · 需联网' : ' · 离线可读'}</small></div>
+            <div class="st">${esc(s.name)}<small>${esc(s.desc)}${group}${dup ? ' · ⚠ 与 ' + dup + ' 个源同地址' : ''} · 现有 ${n} 卷${s.online ? ' · 需联网' : ' · 离线可读'}</small></div>
+            ${s._cfg ? `<button class="btn btn-ghost btn-sm" data-action="source-edit" data-id="${esc(s.id)}">编辑</button>` : ''}
             <button class="switch ${s.enabled === false ? '' : 'on'}" data-action="toggle-source" data-id="${esc(s.id)}" aria-label="${esc(s.name)}"></button>
           </div>`;
         }).join('')}
-        <div class="setting-row" data-action="add-source">${icon('plus')}<div class="st">添加自定义书源<small>粘贴一段 JS 插件即可接入别的书库，无需改动主程序</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="add-source">${icon('plus')}<div class="st">添加书源（可视化）<small>填网页地址与选择器即可，不需要写代码；仅用于公版或你有权使用的资源</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="add-source-js">${icon('brush')}<div class="st">添加书源（JS 插件）<small>高级用法：自己写 MJ.sources.register 代码，完全自定义取书逻辑</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
     html += `<div class="section">${sectionHead('其他', '', '')}
       <div class="setting-list">
@@ -5426,7 +5479,37 @@
         toast((s.enabled === false ? '已停用 ' : '已启用 ') + s.name);
         break;
       }
-      case 'add-source': openSourceEditor(); break;
+      case 'add-source': openSourceForm(); break;
+      case 'add-source-js': openSourceEditor(); break;
+      case 'source-edit': openSourceForm(id); break;
+      case 'source-switch-js': {
+        const g = (sid) => ($('#' + sid) || {}).value || '';
+        const cfg = { id: g('sfId').trim(), name: g('sfName').trim(), group: g('sfGroup').trim(),
+          listUrl: g('sfListUrl').trim(), bookList: g('sfBookList').trim(), bookTitle: g('sfBookTitle').trim(),
+          bookLink: g('sfBookLink').trim(), chapterList: g('sfChapterList').trim(), content: g('sfContent').trim(),
+          defaultAuthor: g('sfAuthor').trim(), replaceRegex: g('sfReplace').trim() };
+        closeSourceEditor();
+        openSourceEditor();
+        const ta = $('#sourceCode');
+        if (ta && cfg.id) ta.value = '/* mj-visual:' + cfg.id + ' */MJ.sources.register(MJ.sourceKit.makeSource(' + JSON.stringify(cfg) + '));';
+        break;
+      }
+      case 'source-form-save': {
+        let built;
+        try { built = sourceCodeFromForm(); }
+        catch (e) { toast(e.message || '表单填写有误'); break; }
+        const r = runSourceCodeSafe(built.code);
+        if (r.err) { toast('书源接入失败：' + (r.err.message || '未知错误')); break; }
+        /* 同 id 覆盖时引用也会变；完全没变说明没真正注册 */
+        const changed = r.after.length !== r.before.length || r.after.some((s, i) => s !== r.before[i]);
+        if (!changed) { toast('书源没有生效'); break; }
+        const mark = '/* mj-visual:' + built.cfg.id + ' */';
+        saveCustomSources([...customSources().filter((c) => c.indexOf(mark) < 0), built.code]);
+        closeSourceEditor();
+        (async () => { await SRC.refresh(); renderNav(ui.nav); rerender(); })();
+        toast('书源已接入：' + built.cfg.name);
+        break;
+      }
       case 'source-close': closeSourceEditor(); break;
       case 'source-save': {
         const ta = $('#sourceCode');
