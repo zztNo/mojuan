@@ -97,18 +97,34 @@
     if (!src || typeof src.getChapterNotes !== 'function') return [];
     try { return src.getChapterNotes(b.id, idx + 1) || []; } catch (e) { return []; }
   }
+  /* A5 内容净化：用户自己配的正则替换，作用于正文段落。
+     跳过占位提示与「本章完」，免得把错误提示当成正文洗掉、或抹掉章末标记。 */
+  function cleanParagraphs(paras) {
+    const rules = (state.settings.cleanRules || []).filter((r) => r && r.pattern);
+    if (!rules.length) return paras;
+    return paras.map((t) => {
+      if (!t || /^（(这一章暂未取到|本章内容未能读取)/.test(t) || t.indexOf('（本章完') === 0) return t;
+      let s = t;
+      rules.forEach((r) => {
+        try { s = s.replace(new RegExp(r.pattern, r.flags || 'g'), r.replacement || ''); }
+        catch (e) { /* 写错的规则跳过，不影响阅读 */ }
+      });
+      return s.trim() || t;
+    });
+  }
   function paragraphs(b, idx) {
+    const cleaned = (arr) => cleanParagraphs(arr);
     if (b.local) {
       const rec = contentCache[b.id];
       const c = rec && rec.chapters && rec.chapters[idx];
-      return c && c.paras && c.paras.length ? c.paras : ['本章内容未能读取，请重新导入这卷。'];
+      return cleaned(c && c.paras && c.paras.length ? c.paras : ['本章内容未能读取，请重新导入这卷。']);
     }
     /* 内置源直接同步取；在线源走预取缓存 */
     const sync = SRC.getChapterSync(b.id, idx + 1);
-    if (sync && sync.length) return sync;
+    if (sync && sync.length) return cleaned(sync);
     const rec = contentCache[b.id];
     const c = rec && rec.chapters && rec.chapters[idx];
-    if (c && c.paras && c.paras.length) return c.paras;
+    if (c && c.paras && c.paras.length) return cleaned(c.paras);
     const why = c && c.error ? '（' + c.error + '）' : '';
     return ['（这一章暂未取到正文' + why + '，点下方「重新取回」再试一次）'];
   }
@@ -390,7 +406,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -409,7 +425,14 @@
        后者在滚动模式是 scrollTop 比例、翻页模式是页码比例，不是字符进度。 */
     listenPos: {},
     pinned: [],
-    bookTags: {}
+    bookTags: {},
+    /* 订阅源：用户自己填的网页列表规则，只用于公版 / 开放获取 / 自有资源 */
+    subscriptions: [],
+    subRead: {},
+    /* 自定义书单：用户自己命名的书 grouping */
+    lists: [],
+    /* WebDAV 备份配置：密码存在本机浏览器里，请勿在公用设备使用 */
+    webdav: { url: '', user: '', pass: '' }
   };
   let state = load();
   /* 数据迁移，按版本号各跑一次。
@@ -469,6 +492,10 @@
         bookTags: Object.assign({}, DEFAULTS.bookTags, (raw || {}).bookTags || {}),
         listenPos: Object.assign({}, DEFAULTS.listenPos, (raw || {}).listenPos || {}),
         pinned: Array.isArray((raw || {}).pinned) ? raw.pinned : [],
+        subscriptions: Array.isArray((raw || {}).subscriptions) ? raw.subscriptions : [],
+        subRead: Object.assign({}, DEFAULTS.subRead, (raw || {}).subRead || {}),
+        lists: Array.isArray((raw || {}).lists) ? raw.lists : [],
+        webdav: Object.assign({}, DEFAULTS.webdav, (raw || {}).webdav || {}),
         readLog: Object.assign({}, DEFAULTS.readLog, (raw || {}).readLog || {})
       });
     } catch (e) { return structuredClone(DEFAULTS); }
@@ -570,7 +597,7 @@
     catalogTab: 'catalog', flipTargetPage: null, flipDir: '',
     shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
     noteSearch: '', noteBook: '', noteColor: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
-    noteMulti: false, notePicked: new Set(), noteLimit: 200,
+    noteMulti: false, notePicked: new Set(), noteLimit: 200, paraGroup: 0,
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
     bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
     tocLoading: false, tocFailed: false, tocOffline: false, storageFull: false
@@ -884,6 +911,11 @@
         <div class="ce-head"><h3>${editId ? '编辑书源' : '添加书源（可视化）'}</h3>
           <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
         <div class="mm-body">
+          <label>公版站点模板（可选，点选后填入示例地址与选择器，仍需你自行验证）
+            <select id="sfTemplate"><option value="">— 自定义 —</option>
+              <option value="gutenberg">古登堡计划（英文公版）</option>
+              <option value="wikisource">中文维基文库</option>
+            </select></label>
           ${f('sfId', '标识 ID（英文/数字，唯一）', c.id || '', '', 'my-src-1')}
           ${f('sfName', '书源名称', c.name || '', '', '我的书库')}
           ${f('sfGroup', '分组', c.group || '', '同一分组的书源可在列表里归在一起。', '自定义')}
@@ -904,6 +936,17 @@
         </div>
       </div>`;
     a11ySweep(root);
+    /* C 方案：只给公版站点的「入口地址示例」，不预置选择器、不保证可用。
+       目标站是否允许跨域、页面结构如何，由用户自己打开页面验证。 */
+    const tpl = $('#sfTemplate');
+    if (tpl) tpl.addEventListener('change', () => {
+      const urls = {
+        gutenberg: 'https://www.gutenberg.org/ebooks/search/?query=zh',
+        wikisource: 'https://zh.wikisource.org/wiki/Special:Search'
+      };
+      const u = urls[tpl.value];
+      if (u && $('#sfListUrl')) { $('#sfListUrl').value = u; toast('已填入示例地址，选择器请按实际页面填写'); }
+    });
   }
   function sourceCodeFromForm() {
     const g = (id) => ($('#' + id) || {}).value || '';
@@ -1090,17 +1133,15 @@
       }).catch(() => res(out));
     });
   }
-  async function exportBackup() {
-    toast('正在整理备份…');
+  /* 备份分段序列化：本地下载与 WebDAV 上传共用，避免两处逻辑分叉。
+     一份含 20 卷正文的备份可能几十 MB，整份 stringify 峰值 2–3 倍会爆手机，
+     所以按「小字段 + 逐卷正文」交给 Blob 原生拼接，堆里只留单卷字符串。 */
+  async function buildBackupParts() {
     const contents = await collectContents();
     const extras = {};
     EXTRA_KEYS.forEach((k) => {
       try { const v = localStorage.getItem(k); if (v != null) extras[k] = v; } catch (e) { /* 存储不可用 */ }
     });
-    /* 一份含 20 卷正文的备份可能几十 MB。整份 JSON.stringify 会先拼出一个巨型
-       字符串，紧接着 Blob 再复制一份，峰值能到原体积的 2–3 倍，手机上直接爆。
-       这里按「小字段 + 逐卷正文」分段序列化，交给 Blob 原生拼接，
-       JS 堆里同时只存在单卷那一份字符串。 */
     const parts = ['\ufeff', '{"app":', JSON.stringify(BACKUP_APP),
       ',"version":', String(BACKUP_VER),
       ',"exportedAt":', JSON.stringify(new Date().toISOString()),
@@ -1109,19 +1150,72 @@
     let first = true;
     Object.keys(contents).forEach((k) => {
       const sep = first ? '' : ','; first = false;
-      /* 每卷序列化完立刻交给 Blob：字符串出栈就能回收，parts 里只留 Blob 片段。
-         早先是把整卷字符串 push 进数组，几十卷全攒在 JS 堆里，注释说的
-         「同时只存在单卷那一份」其实没做到。Blob 构造接受多个片段，
-         不必先拼成一个更大的字符串。 */
       parts.push(new Blob([sep, JSON.stringify(k), ':', JSON.stringify(contents[k])]));
     });
     parts.push('},"extras":', JSON.stringify(extras), '}');
+    return { parts, n: Object.keys(contents).length, extrasN: Object.keys(extras).length };
+  }
+  async function exportBackup() {
+    toast('正在整理备份…');
+    const { parts, n, extrasN } = await buildBackupParts();
     const ok = downloadText('墨卷备份-' + today() + '.json', parts);
     toast(ok
-      ? '备份已导出 · 含 ' + Object.keys(contents).length + ' 卷本地卷正文'
-        + (Object.keys(extras).length ? '、书源与音色配置' : '')
+      ? '备份已导出 · 含 ' + n + ' 卷本地卷正文'
+        + (extrasN ? '、书源与音色配置' : '')
       : '导出失败，请检查浏览器下载权限');
   }
+  /* A9 WebDAV：纯前端 fetch PUT/GET，要求目标服务允许跨域（CORS）。
+     不是所有 WebDAV 服务都给跨域头，失败会明确提示，不静默。 */
+  function webdavAuth() {
+    const w = state.webdav || {};
+    if (!w.user) return {};
+    try { return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(w.user + ':' + (w.pass || '')))) }; }
+    catch (e) { return {}; }
+  }
+  async function webdavUpload() {
+    const w = state.webdav || {};
+    if (!w.url) { toast('先填 WebDAV 地址'); return; }
+    try {
+      toast('正在整理备份…');
+      const { parts } = await buildBackupParts();
+      const res = await fetch(w.url, { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, webdavAuth()), body: new Blob(parts, { type: 'application/json' }) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      toast('已上传到 WebDAV');
+    } catch (e) {
+      toast('上传失败：' + ((e && e.message) || '网络或跨域受限') + '（需服务允许 CORS）');
+    }
+  }
+  async function webdavDownload() {
+    const w = state.webdav || {};
+    if (!w.url) { toast('先填 WebDAV 地址'); return; }
+    try {
+      const res = await fetch(w.url, { method: 'GET', headers: webdavAuth() });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      await restoreBackup(text);
+    } catch (e) {
+      toast('下载失败：' + ((e && e.message) || '网络或跨域受限') + '（需服务允许 CORS）');
+    }
+  }
+  function openWebdavForm() {
+    const w = state.webdav || {};
+    let root = $('#sourceModal');
+    if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+    root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+      <div class="cover-editor mini-modal"><div class="ce-head"><h3>WebDAV 备份</h3>
+        <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+      <div class="mm-body">
+        <label>完整文件 URL<input id="wdUrl" value="${esc(w.url || '')}" placeholder="https://dav.example.com/mojuan/backup.json"></label>
+        <label>账号（可选）<input id="wdUser" value="${esc(w.user || '')}" autocomplete="off"></label>
+        <label>密码（可选）<input id="wdPass" type="password" value="${esc(w.pass || '')}" autocomplete="off"></label>
+        <p class="mm-hint">账号密码只存本机浏览器，请勿在公用设备使用。目标服务需允许跨域访问，否则会失败；这不是墨卷能绕过的限制。</p>
+      </div>
+      <div class="ce-foot"><div></div>
+        <button class="btn btn-ghost" data-action="wd-download">从 WebDAV 恢复</button>
+        <button class="btn btn-primary" data-action="wd-save">保存并上传</button></div></div>`;
+    a11ySweep(root);
+  }
+
   async function restoreBackup(text) {
     let obj;
     try { obj = JSON.parse(String(text).replace(/^\uFEFF/, '')); }
@@ -1670,6 +1764,178 @@
     save();
   }
 
+  /* ---------- 页面：订阅（A1） ---------- */
+  let subCache = {};   /* 订阅源 id -> 文章列表，切页不重复抓 */
+  function pageSubscribe() {
+    let html = `<button class="btn btn-ghost btn-sm" style="margin-bottom:18px" data-action="history-back">${icon('back', 'ic-sm')} 返回</button>`;
+    html += head('订阅', 'SUBSCRIBE', '自己接的网页列表 · 只用于公版与你有权使用的资源',
+      `<button class="btn btn-ghost btn-sm" data-action="sub-add">${icon('plus', 'ic-sm')} 添加订阅源</button>`);
+    const subs = (state.subscriptions || []).filter((s) => s.enabled !== false);
+    if (!subs.length) {
+      return html + `<div class="empty">${icon('book')}<p>还没有订阅源</p>
+        <p class="muted" style="font-size:12px">点右上角「添加订阅源」，填一个网页地址与列表选择器即可</p></div>`;
+    }
+    html += `<div class="section">${sectionHead('订阅', '', '')}<div class="setting-list">`;
+    subs.forEach((s) => {
+      const list = subCache[s.id];
+      const n = list ? list.length : 0;
+      const err = subCache[s.id + ':error'];
+      html += `<div class="setting-row">
+        ${icon('book')}
+        <div class="st">${esc(s.name)}<small>${esc(s.url)}${err ? ' · 取回失败：' + esc(err) : (list ? ' · ' + n + ' 条' : ' · 点右侧刷新')}</small></div>
+        <button class="btn btn-ghost btn-sm" data-action="sub-refresh" data-id="${esc(s.id)}">刷新</button>
+        <button class="btn btn-ghost btn-sm" data-action="sub-edit" data-id="${esc(s.id)}">编辑</button>
+      </div>`;
+      if (list) {
+        list.forEach((a) => {
+          const read = !!state.subRead[a.key];
+          html += `<div class="setting-row sub-item ${read ? 'read' : ''}">
+            <div class="st" style="cursor:pointer" data-action="sub-open" data-val="${esc(a.key)}">
+              ${esc(a.title)}<small>${esc(a.url)}</small></div>
+            <button class="btn btn-ghost btn-sm" data-action="sub-toggle-read" data-val="${esc(a.key)}">${read ? '已读' : '未读'}</button>
+          </div>`;
+        });
+      }
+    });
+    return html + '</div></div>';
+  }
+  function openSubForm(editId) {
+    const old = (state.subscriptions || []).find((s) => s.id === editId) || {};
+    let root = $('#sourceModal');
+    if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+    const f = (id, label, val, hint, ph) => `<label>${label}<input id="${id}" value="${esc(val || '')}" placeholder="${esc(ph || '')}" spellcheck="false"></label>${hint ? `<p class="mm-hint">${hint}</p>` : ''}`;
+    root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+      <div class="cover-editor mini-modal source-form">
+        <div class="ce-head"><h3>${editId ? '编辑订阅源' : '添加订阅源'}</h3>
+          <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+        <div class="mm-body">
+          ${f('sbId', '标识 ID', old.id || '', '', 'rss-1')}
+          ${f('sbName', '名称', old.name || '', '', '我的订阅')}
+          ${f('sbUrl', '列表页地址', old.url || '', '目标站需允许浏览器跨域访问，否则取不到内容。', 'https://example.com/news')}
+          ${f('sbArticles', '条目选择器', old.ruleArticles || '', '匹配每一条，如 .post 或 li.item。', '.post')}
+          ${f('sbTitle', '标题选择器', old.ruleTitle || '', '相对每条的选择器，留空取条目文字。', 'h3 a')}
+          ${f('sbLink', '链接选择器', old.ruleLink || '', '取 href 写成 a@href。', 'a@href')}
+          <p class="mm-hint">只填公版、开放获取或你有权使用的资源；能否读取取决于目标站是否允许跨域访问。</p>
+        </div>
+        <div class="ce-foot"><div></div>
+          <button class="btn btn-ghost" data-action="source-close">取消</button>
+          <button class="btn btn-primary" data-action="sub-form-save">保存</button>
+        </div>
+      </div>`;
+    a11ySweep(root);
+  }
+  /* ---------- 页面：我的书单（A8） ---------- */
+  function pageLists() {
+    let html = `<button class="btn btn-ghost btn-sm" style="margin-bottom:18px" data-action="history-back">${icon('back', 'ic-sm')} 返回</button>`;
+    html += head('书单', 'LISTS', '把书按自己的主题归在一起',
+      `<button class="btn btn-ghost btn-sm" data-action="list-add">${icon('plus', 'ic-sm')} 新建书单</button>`);
+    const lists = state.lists || [];
+    if (!lists.length) {
+      return html + `<div class="empty">${icon('book')}<p>还没有书单</p>
+        <p class="muted" style="font-size:12px">点右上角新建，再到书详情页把书加进去</p></div>`;
+    }
+    lists.forEach((l) => {
+      const books = (l.bookIds || []).map(getBook).filter(Boolean);
+      html += `<div class="section"><div class="section-head"><h2 class="section-title">${esc(l.name)}</h2>
+        <button class="section-more" data-action="list-rename" data-id="${esc(l.id)}">改名 ${icon('right', 'ic-sm')}</button>
+        <button class="section-more" data-action="list-del" data-id="${esc(l.id)}">删除</button></div>`;
+      if (!books.length) {
+        html += `<div class="empty" style="padding:20px">这本单子还空着<small style="display:block;margin-top:6px">在书详情页点「加入书单」</small></div></div>`;
+        return;
+      }
+      html += `<div class="book-grid">${books.map((b) => bookCard(b, { quickAdd: false })).join('')}</div></div>`;
+    });
+    return html;
+  }
+  function openListEditor(kind, id) {
+    let root = $('#sourceModal');
+    if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+    const list = (state.lists || []).find((l) => l.id === id);
+    const title = kind === 'add' ? '新建书单' : (kind === 'rename' ? '改名书单' : '加入书单');
+    let body = '';
+    if (kind === 'pick') {
+      body = `<p class="mm-hint">选一本单子，把这本书加进去。</p><div class="setting-list">${(state.lists || []).map((l) =>
+        `<div class="setting-row" data-action="list-add-book" data-id="${esc(l.id)}" data-val="${esc(id)}">
+          ${icon('book')}<div class="st">${esc(l.name)}<small>${(l.bookIds || []).length} 本</small></div>${icon('right', 'ic-sm')}</div>`).join('') || '<div class="empty" style="padding:20px">还没有书单，先去墨斋新建一个</div>'}</div>`;
+    } else {
+      body = `<label>书单名称<input id="listNameInput" value="${esc(list ? list.name : '')}" placeholder="如：睡前读"></label>`;
+    }
+    root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+      <div class="cover-editor mini-modal"><div class="ce-head"><h3>${title}</h3>
+        <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+      <div class="mm-body">${body}</div>
+      <div class="ce-foot"><div></div><button class="btn btn-ghost" data-action="source-close">取消</button>
+        ${kind === 'pick' ? '' : `<button class="btn btn-primary" data-action="list-save" data-val="${esc(id || '')}">保存</button>`}</div></div>`;
+    a11ySweep(root);
+  }
+
+  /* A3 换源：同一本书在不同来源间切换，进度/书签/笔记/标记一起迁过去。
+     只匹配「同名书」，不猜；不同来源的 id 不同，进度按 id 存，所以要显式迁移。 */
+  function openSwitchSource(id) {
+    const cur = getBook(id); if (!cur) return;
+    const title = String(cur.title || '').trim();
+    const candidates = allBooks().filter((b) => b.id !== id && b.sourceId !== cur.sourceId
+      && String(b.title || '').trim() === title);
+    let root = $('#sourceModal');
+    if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+    const rows = candidates.length ? candidates.map((b) => {
+      const srcName = ((SRC.get(b.sourceId) || {}).name) || (b.local ? '本地卷' : '公版');
+      return `<div class="setting-row" data-action="switch-source-to" data-id="${esc(b.id)}">
+        ${icon(b.online ? 'store' : 'book')}<div class="st">${esc(b.title)}<small>${esc(b.author || '')} · ${esc(srcName)} · ${(b.chapters || []).length} 章</small></div>
+        ${icon('right', 'ic-sm')}</div>`;
+    }).join('') : `<div class="empty" style="padding:20px">其他来源里没有找到《${esc(title)}》</div>`;
+    root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+      <div class="cover-editor mini-modal">
+        <div class="ce-head"><h3>换源 · ${esc(title)}</h3>
+          <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+        <div class="mm-body"><p class="mm-hint">选另一个来源的同名书，当前进度、书签、笔记与标记会一起带过去。</p>
+          <div class="setting-list">${rows}</div></div>
+        <div class="ce-foot"><div></div><button class="btn btn-ghost" data-action="source-close">取消</button></div>
+      </div>`;
+    a11ySweep(root);
+  }
+  function switchSourceTo(toId) {
+    const from = readerRoot.dataset.currentBook || (location.hash.match(/book\/([^/]+)/) || [])[1];
+    if (!from || from === toId) { closeSourceEditor(); return; }
+    const to = getBook(toId);
+    if (!to) { toast('目标书不存在'); return; }
+    /* 进度按章号与章内比例迁移，不按百分比硬搬 */
+    const p = state.progress[from];
+    if (p) {
+      state.progress[toId] = Object.assign({}, p, { updated: Date.now() });
+      delete state.progress[from];
+    }
+    ['bookmarks', 'annotations', 'bookTags', 'listenPos'].forEach((k) => {
+      if (state[k] && state[k][from]) {
+        state[k][toId] = state[k][toId] || state[k][from];
+        delete state[k][from];
+      }
+    });
+    if (state.pinned && state.pinned.includes(from)) {
+      state.pinned = state.pinned.map((x) => x === from ? toId : x);
+    }
+    if (state.lastRead === from) state.lastRead = toId;
+    if (!state.shelf.includes(toId)) state.shelf.unshift(toId);
+    closeSourceEditor();
+    save(); renderNav(ui.nav);
+    go('book/' + toId);
+    toast('已换到《' + to.title + '》的另一来源，进度已保留');
+  }
+
+  async function refreshSub(id) {
+    const s = (state.subscriptions || []).find((x) => x.id === id);
+    if (!s) return;
+    try {
+      subCache[id] = await MJ.subKit.fetchArticles(s);
+      delete subCache[id + ':error'];
+    } catch (e) {
+      delete subCache[id];
+      subCache[id + ':error'] = (e && e.message ? e.message : '取回失败').slice(0, 40);
+      toast('订阅取回失败：' + subCache[id + ':error']);
+    }
+    rerender();
+  }
+
   /* ---------- 页面：书籍详情 ---------- */
   function pageBook(id) {
     const b = getBook(id); if (!b) return `<div class="empty">${icon('book')}<p>这一卷找不到了</p>
@@ -1704,6 +1970,8 @@
           <button class="btn btn-primary" data-action="start-read" data-id="${b.id}">${icon('book', 'ic-sm')} ${begun ? '续卷 · 第' + Math.min(chapters.length, pr.ch || 1) + '章' : '开卷'}</button>
           <button class="btn btn-ghost" data-action="${inShelf ? 'remove-shelf' : 'add-shelf'}" data-id="${b.id}">
             ${icon(inShelf ? 'check' : 'plus', 'ic-sm')} ${inShelf ? '已在藏卷' : '收入藏卷'}</button>
+          <button class="btn btn-ghost btn-sm" data-action="switch-source" data-id="${esc(b.id)}">${icon('store', 'ic-sm')} 换源</button>
+          <button class="btn btn-ghost btn-sm" data-action="list-pick" data-id="${esc(b.id)}">${icon('grid', 'ic-sm')} 加入书单</button>
           ${b.local ? `<button class="btn btn-ghost btn-sm btn-danger" data-action="delete-local" data-id="${b.id}">${icon('trash', 'ic-sm')} 弃卷</button>` : ''}
         </div>
         <div class="detail-tag-row">
@@ -1960,6 +2228,7 @@
         })()}
         <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、笔记、封面、设置、自定义书源与在线音色、本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-backup">${icon('book')}<div class="st">从备份恢复<small>选择之前导出的 .json，会覆盖当前所有数据</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="webdav-config">${icon('store')}<div class="st">WebDAV 云备份<small>${state.webdav && state.webdav.url ? '已配置 · 可上传 / 恢复' : '填一个支持跨域的 WebDAV 地址，上传或恢复备份'}</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>${noteFilterActive() ? '按「我的笔记」当前的搜索 / 按卷 / 颜色筛选导出' : '把所有卷的笔记整理成一个 TXT'}，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
     html += `<div class="section">${sectionHead('书源', '', '')}
@@ -1984,6 +2253,8 @@
         <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD / HTML，支持多选</small></div>${icon('right', 'ic-sm')}</div>
         ${state.localBooks.length ? `<div class="setting-row" data-action="go-local-list">${icon('trash')}<div class="st">整理 / 删除已导入的卷<small>已导入 ${state.localBooks.length} 本，可单本删除；藏卷里长按卷册可批量理卷</small></div>${icon('right', 'ic-sm')}</div>` : ''}
         <div class="setting-row" data-action="go-shelf">${icon('shelf')}<div class="st">管理我的藏卷</div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-go="subscribe">${icon('book')}<div class="st">我的订阅<small>自己接的网页列表 · 仅用于公版与你有权使用的资源</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-go="lists">${icon('grid')}<div class="st">我的书单<small>把书按自己的主题归在一起</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="open-shortcut-help">${icon('settings')}<div class="st">键盘捷径<small>按 ? 随时打开，桌面上读墨更快</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="reset-data">${icon('trash')}<div class="st">清空本地读墨数据<small>藏卷、进度与设置将恢复初始状态</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
@@ -2031,6 +2302,11 @@
           <h1>${esc(cur.title)}</h1>
           ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${highlightHtml(p, b.id, ch, j, hidx)}</p>`).join('')}
           ${notes.length && !errMsg ? `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} 注释 · ${notes.length} 条</button>` : ''}
+          ${state.settings.pageMode === 'para' ? `<div class="para-nav">
+            <button class="btn btn-ghost btn-sm" data-action="para-prev">${icon('left', 'ic-sm')} 上一段</button>
+            <span id="paraTip">—</span>
+            <button class="btn btn-ghost btn-sm" data-action="para-next">下一段 ${icon('right', 'ic-sm')}</button>
+          </div>` : ''}
           <div class="reader-chapter-nav">
             <button data-action="reader-prev" ${ch <= 1 ? 'disabled' : ''}>${icon('left', 'ic-sm')} 上一章</button>
             <button data-action="reader-catalog">目录</button>
@@ -2122,8 +2398,51 @@
     paper.style.setProperty('--fs', state.settings.fs + 'px');
     paper.style.setProperty('--lh', state.settings.lh);
     paper.style.setProperty('--ff', FONT_STACKS[state.settings.font] || FONT_STACKS.song);
+    /* 章名字体可单独选，留空则随正文 */
+    paper.style.setProperty('--chapter-ff', state.settings.chapterFont
+      ? (FONT_STACKS[state.settings.chapterFont] || FONT_STACKS.song) : 'inherit');
+    paper.style.setProperty('--hl-underline', (state.settings.underlineWidth || 1) + 'px');
     r.dataset.paper = state.settings.paper;
   }
+  /* A6 按段落：滚动布局上一次显示 3 段，用 class 控制显隐（不用 hidden，
+     免得和高亮刷新按 data-pi 查找打架）。不改变已有滚动 / 翻页模式。 */
+  const PARA_PER_GROUP = 3;
+  function paraGroupCount() {
+    const n = $$('#readerPaper p[data-pi]').length;
+    return Math.max(1, Math.ceil(n / PARA_PER_GROUP));
+  }
+  function applyParaGroup() {
+    const body = $('#readerBody'); if (!body) return;
+    const ps = $$('#readerPaper p[data-pi]');
+    const total = paraGroupCount();
+    if (ui.paraGroup < 0) ui.paraGroup = 0;
+    if (ui.paraGroup >= total) ui.paraGroup = total - 1;
+    ps.forEach((el, i) => {
+      el.classList.toggle('para-hidden', Math.floor(i / PARA_PER_GROUP) !== ui.paraGroup);
+    });
+    const tip = $('#paraTip');
+    if (tip) tip.textContent = (ui.paraGroup + 1) + ' / ' + total + ' 组';
+  }
+  function flipParaGroup(dir) {
+    const total = paraGroupCount();
+    const next = ui.paraGroup + dir;
+    const bid = readerRoot.dataset.currentBook;
+    const ch = Number(readerRoot.dataset.currentCh) || 1;
+    if (next >= total) {
+      if (ch < chapterList(getBook(bid)).length) { ui.paraGroup = 0; switchChapter(bid, ch + 1); }
+      else toast('已经是最后一章了');
+      return;
+    }
+    if (next < 0) {
+      if (ch > 1) { ui.paraGroup = 9999; switchChapter(bid, ch - 1); }
+      else toast('已经是第一章了');
+      return;
+    }
+    ui.paraGroup = next;
+    applyParaGroup();
+    const body = $('#readerBody'); if (body) body.scrollTop = 0;
+  }
+
   /* ---------- 左右翻页：按当前窗口与字号把整章切成页 ---------- */
   let flipState = { pages: [], page: 0, id: null, ch: 0 };
   function flipItems(b, ch) {
@@ -4723,7 +5042,7 @@
     if (flipMode && chapterErrMsg(b, ch)) flipMode = false;
     /* 在线书翻章要等取正文，读到本章末再翻会卡一下。这里闲时把下一章先取回来。 */
     if (b.online && ch < chapterList(b).length) ensureChapter(b, ch + 1);
-    readerRoot.dataset.mode = flipMode ? 'flip' : 'scroll';
+    readerRoot.dataset.mode = flipMode ? 'flip' : (state.settings.pageMode === 'para' ? 'para' : 'scroll');
     /* 章号若被钳到范围内（手输 999、或在线书章目少于预期），把地址栏也改回来，
      * 免得复制出去/存成书签的链接指向不存在的章 */
     const cur = parseRoute();
@@ -4755,6 +5074,7 @@
       if (rd) { rd.setAttribute('tabindex', '-1'); rd.focus({ preventScroll: true }); }
     }
     applyReaderStyle();
+    if (readerRoot.dataset.mode === 'para') { ui.paraGroup = 0; applyParaGroup(); }
     const body = $('#readerBody');
     requestAnimationFrame(() => paginateAndRender(b, ch, token));
     /* 渲染落定后再预取下一章，别和首屏分页抢主线程 / 带宽 */
@@ -4903,10 +5223,22 @@
         <div class="rs-row"><label>读墨</label><div class="rs-pills">
           <button class="rs-pill ${state.settings.pageMode === 'flip' ? 'active' : ''}" data-action="set-pagemode" data-val="flip">左右翻页</button>
           <button class="rs-pill ${state.settings.pageMode === 'scroll' ? 'active' : ''}" data-action="set-pagemode" data-val="scroll">上下滚动</button>
+          <button class="rs-pill ${state.settings.pageMode === 'para' ? 'active' : ''}" data-action="set-pagemode" data-val="para">按段落</button>
         </div></div>
         <div class="rs-row"><label>翻页</label><div class="rs-pills">
           ${[['slide', '滑动'], ['realistic', '仿真'], ['fade', '淡入'], ['none', '无动画']].map(([k, l]) =>
             `<button class="rs-pill ${state.settings.flipAnim === k ? 'active' : ''}" data-action="set-flipanim" data-val="${k}">${l}</button>`).join('')}
+        </div></div>
+        <div class="rs-row"><label>章名字体</label><div class="rs-pills">
+          <button class="rs-pill ${!state.settings.chapterFont ? 'active' : ''}" data-action="set-chapterfont" data-val="">随正文</button>
+          ${[['song', '宋体'], ['kai', '楷体'], ['hei', '黑体']].map(([k, l]) =>
+            `<button class="rs-pill ${state.settings.chapterFont === k ? 'active' : ''}" data-action="set-chapterfont" data-val="${k}">${l}</button>`).join('')}
+        </div></div>
+        <div class="rs-row"><label>划线粗细</label><div class="rs-pills">
+          ${[1, 2, 3].map((w) => `<button class="rs-pill ${state.settings.underlineWidth === w ? 'active' : ''}" data-action="set-underline" data-val="${w}">${w}px</button>`).join('')}
+        </div></div>
+        <div class="rs-row"><label>净化</label><div class="rs-pills">
+          <button class="rs-pill" data-action="clean-rules">正文替换规则 ${(state.settings.cleanRules || []).length ? '· ' + state.settings.cleanRules.length + ' 条' : ''}</button>
         </div></div>
         <div class="rs-row rate-inline"><label>朗读</label>${rateSliderHtml(state.settings.rate, '语速 · 按住圆点拖动')}</div>
         <div class="rs-row"><label>存档</label><div class="rs-pills">
@@ -5333,7 +5665,8 @@
     }
     if (r.name !== 'shelf') closeShelfMenu();
     ui.nav = NAV.some((n) => n.key === r.name) ? r.name
-      : (['book', 'search', 'category', 'rank'].includes(r.name) ? 'store' : ui.nav);
+      : (['book', 'search', 'category', 'rank'].includes(r.name) ? 'store'
+        : (['subscribe', 'lists'].includes(r.name) ? 'me' : ui.nav));
     renderNav(ui.nav);
     let html;
     switch (r.name) {
@@ -5347,6 +5680,8 @@
       case 'search': html = pageSearch(); break;
       case 'book': html = pageBook(r.id); break;
       case 'me': html = pageMe(); break;
+      case 'subscribe': html = pageSubscribe(); break;
+      case 'lists': html = pageLists(); break;
       default: html = storeHtml('home');
     }
     view.innerHTML = html;
@@ -5477,6 +5812,90 @@
         save();
         (async () => { await SRC.refresh(); rerender(); })();
         toast((s.enabled === false ? '已停用 ' : '已启用 ') + s.name);
+        break;
+      }
+      case 'webdav-config': openWebdavForm(); break;
+      case 'wd-save': {
+        state.webdav = {
+          url: (($('#wdUrl') || {}).value || '').trim(),
+          user: (($('#wdUser') || {}).value || '').trim(),
+          pass: ($('#wdPass') || {}).value || ''
+        };
+        save(); webdavUpload();
+        break;
+      }
+      case 'wd-download': {
+        state.webdav = Object.assign({}, state.webdav, {
+          url: (($('#wdUrl') || {}).value || '').trim(),
+          user: (($('#wdUser') || {}).value || '').trim(),
+          pass: ($('#wdPass') || {}).value || ''
+        });
+        save(); webdavDownload();
+        break;
+      }
+      case 'list-add': openListEditor('add'); break;
+      case 'list-rename': openListEditor('rename', id); break;
+      case 'list-pick': openListEditor('pick', id); break;
+      case 'list-save': {
+        const name = (($('#listNameInput') || {}).value || '').trim();
+        if (!name) { toast('书单名称必填'); break; }
+        if (val) {
+          const l = (state.lists || []).find((x) => x.id === val);
+          if (l) l.name = name;
+        } else {
+          state.lists = state.lists || [];
+          state.lists.push({ id: 'list-' + Date.now().toString(36), name, bookIds: [] });
+        }
+        save(); closeSourceEditor(); rerender(); toast('书单已保存');
+        break;
+      }
+      case 'list-add-book': {
+        const l = (state.lists || []).find((x) => x.id === id);
+        const bookId = val;
+        if (!l || !bookId) break;
+        l.bookIds = l.bookIds || [];
+        if (!l.bookIds.includes(bookId)) l.bookIds.unshift(bookId);
+        save(); closeSourceEditor(); toast('已加入《' + l.name + '》');
+        break;
+      }
+      case 'list-del': {
+        const l = (state.lists || []).find((x) => x.id === id);
+        if (!l || !confirm('删除书单《' + l.name + '》？书本身不会删除。')) break;
+        state.lists = state.lists.filter((x) => x.id !== id);
+        save(); rerender(); toast('书单已删除');
+        break;
+      }
+      case 'switch-source': openSwitchSource(id); break;
+      case 'switch-source-to': switchSourceTo(id); break;
+      case 'sub-add': openSubForm(); break;
+      case 'sub-edit': openSubForm(id); break;
+      case 'sub-refresh': refreshSub(id); break;
+      case 'sub-form-save': {
+        const g = (sid) => ($('#' + sid) || {}).value || '';
+        const cfg = { id: g('sbId').trim(), name: g('sbName').trim(), url: g('sbUrl').trim(),
+          ruleArticles: g('sbArticles').trim(), ruleTitle: g('sbTitle').trim(), ruleLink: g('sbLink').trim() };
+        if (!cfg.id || !cfg.name || !cfg.url) { toast('标识、名称、地址必填'); break; }
+        if (!/^[a-zA-Z0-9_-]+$/.test(cfg.id)) { toast('标识只能用英文、数字、下划线和短横线'); break; }
+        const subs = state.subscriptions || (state.subscriptions = []);
+        const i = subs.findIndex((s) => s.id === cfg.id);
+        if (i >= 0) subs[i] = Object.assign({}, subs[i], cfg, { enabled: true });
+        else subs.push(Object.assign({ enabled: true }, cfg));
+        closeSourceEditor();
+        save(); refreshSub(cfg.id);
+        toast('订阅源已保存：' + cfg.name);
+        break;
+      }
+      case 'sub-open': {
+        const a = (subCache[Object.keys(subCache).find((k) => (subCache[k] || []).some((x) => x.key === val))] || []).find((x) => x.key === val);
+        if (!a) break;
+        state.subRead[val] = true; save();
+        window.open(a.url, '_blank', 'noopener,noreferrer');
+        rerender();
+        break;
+      }
+      case 'sub-toggle-read': {
+        if (state.subRead[val]) delete state.subRead[val]; else state.subRead[val] = true;
+        save(); rerender();
         break;
       }
       case 'add-source': openSourceForm(); break;
@@ -5833,11 +6252,49 @@
           showReader(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh));
         } else rerender();
         break;
+      case 'para-prev': flipParaGroup(-1); break;
+      case 'para-next': flipParaGroup(1); break;
       case 'set-flipanim':
         state.settings.flipAnim = val; save();
         if (val !== 'slide') { realClear(); clearAdj(); }
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-flipanim') p.classList.toggle('active', p.dataset.val === val); });
         break;
+      case 'set-chapterfont':
+        state.settings.chapterFont = val; save(); applyReaderStyle();
+        $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-chapterfont') p.classList.toggle('active', p.dataset.val === val); });
+        break;
+      case 'set-underline':
+        state.settings.underlineWidth = Number(val) || 1; save(); applyReaderStyle();
+        $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-underline') p.classList.toggle('active', Number(p.dataset.val) === state.settings.underlineWidth); });
+        break;
+      case 'clean-rules': {
+        let root = $('#sourceModal');
+        if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+        const rules = (state.settings.cleanRules || []).map((r) => r.pattern + (r.replacement ? ' => ' + r.replacement : '')).join('\n');
+        root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+          <div class="cover-editor mini-modal"><div class="ce-head"><h3>正文替换规则</h3>
+            <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+          <div class="mm-body"><p class="mm-hint">每行一条：正则表达式 =&gt; 替换文本。省略 =&gt; 就是删除匹配内容。例如 <code>广告.*</code> 删掉含"广告"的行。</p>
+            <textarea id="cleanRulesInput" rows="10" spellcheck="false" placeholder="广告.*\n第\\d+章 请收藏 =>">${esc(rules)}</textarea></div>
+          <div class="ce-foot"><div></div><button class="btn btn-ghost" data-action="source-close">取消</button>
+            <button class="btn btn-primary" data-action="clean-rules-save">保存</button></div></div>`;
+        a11ySweep(root);
+        break;
+      }
+      case 'clean-rules-save': {
+        const txt = ($('#cleanRulesInput') || {}).value || '';
+        const rules = [];
+        txt.split('\n').forEach((line) => {
+          const s = line.trim(); if (!s) return;
+          const parts = s.split(/\s*=>\s*/);
+          try { new RegExp(parts[0]); rules.push({ pattern: parts[0], replacement: parts.slice(1).join('=>'), flags: 'g' }); }
+          catch (e) { /* 写错的行跳过 */ }
+        });
+        state.settings.cleanRules = rules; save(); closeSourceEditor();
+        if ($('#reader')) showReader(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh));
+        toast('净化规则已保存：' + rules.length + ' 条');
+        break;
+      }
       case 'reset-data':
         if (confirm('确定清空藏卷、进度、设置和已导入的本地卷吗？此操作不可撤销。')) {
           const ids = state.localBooks.map((b) => b.id);
@@ -6480,6 +6937,14 @@
          以前这些键不分模式一律「换章」，按一下空格就跳到下一章，读到哪儿全丢了。 */
       const scrollBody = paging ? null : $('#readerBody');
       if (scrollBody) {
+        /* 按段落模式：空格 / 翻页键 / 左右键改成切段组，不再滚屏 */
+        if (readerRoot.dataset.mode === 'para') {
+          const back = e.shiftKey || e.key === 'PageUp' || e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+          if (e.key === ' ' || e.key === 'PageDown' || e.key === 'PageUp'
+            || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault(); flipParaGroup(back ? -1 : 1); return;
+          }
+        }
         const vh = scrollBody.clientHeight || 600;
         if (e.key === ' ') {
           e.preventDefault();

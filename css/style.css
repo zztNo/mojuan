@@ -533,7 +533,7 @@ img, svg { display: block; }
   line-break: strict;   /* 避头尾：不让「，。」出现在行首 */
 }
 .reader-chapter-no { font-size: .68em; color: var(--reader-sub); letter-spacing: .2em; margin-bottom: 8px; }
-.reader-paper h1 { font-size: 1.35em; font-weight: 700; letter-spacing: .05em; margin: 0 0 34px; padding-bottom: 20px; border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent); }
+.reader-paper h1 { font-family: var(--chapter-ff, inherit); font-size: 1.35em; font-weight: 700; letter-spacing: .05em; margin: 0 0 34px; padding-bottom: 20px; border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent); }
 .reader-paper p { margin: 0 0 1.1em; text-indent: 2em; text-align: justify; text-wrap: pretty; }
 .reader-paper .end-note { text-align: center; text-indent: 0; color: var(--reader-sub); font-size: .72em; margin-top: 42px; letter-spacing: .1em; }
 /* 听书时高亮当前朗读的段落：左侧朱砂竖线 + 淡暖底，眼睛跟得上耳朵 */
@@ -746,6 +746,12 @@ img, svg { display: block; }
 .source-form .mm-body { overflow-y: auto; min-height: 0; gap: 12px; }
 .source-form .mm-body .mm-hint { margin: -6px 0 2px; }
 .source-form .link-more { align-self: flex-start; }
+/* 订阅列表：读过的条目淡化，和「未读」区分开 */
+.sub-item.read .st { opacity: .52; }
+/* 按段落阅读：一次只显示一组，上下按钮翻组 */
+.reader-paper p.para-hidden { display: none; }
+.para-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 24px 0 8px; }
+.para-nav span { font-size: 12px; color: var(--reader-sub); min-width: 46px; text-align: center; }
 /* 书城页签：推荐 / 分类 / 榜单 */
 .store-tabs {
   display: flex; gap: 5px; margin: -2px 0 20px; padding: 5px;
@@ -1130,7 +1136,7 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 /* ---------- 划线 / 批注 ---------- */
 .hl-mark {
   background: color-mix(in srgb, var(--cinnabar) 20%, transparent);
-  box-shadow: inset 0 -2px 0 var(--cinnabar);
+  box-shadow: inset 0 calc(-1 * var(--hl-underline, 2px)) 0 var(--cinnabar);
   border-radius: 2px; padding: 0 1px;
 }
 .hl-pop {
@@ -1164,8 +1170,8 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .ann-meta { margin-top: 5px; font-size: 11px; color: var(--reader-sub); }
 .ann-item .bm-del { position: absolute; right: 8px; top: 10px; }
 /* ---------- 多色划线 ---------- */
-.hl-mark.hl-jade { background: color-mix(in srgb, var(--jade) 26%, transparent); box-shadow: inset 0 -2px 0 var(--jade); }
-.hl-mark.hl-gold { background: color-mix(in srgb, var(--gold) 30%, transparent); box-shadow: inset 0 -2px 0 var(--gold); }
+.hl-mark.hl-jade { background: color-mix(in srgb, var(--jade) 26%, transparent); box-shadow: inset 0 calc(-1 * var(--hl-underline, 2px)) 0 var(--jade); }
+.hl-mark.hl-gold { background: color-mix(in srgb, var(--gold) 30%, transparent); box-shadow: inset 0 calc(-1 * var(--hl-underline, 2px)) 0 var(--gold); }
 .hl-colors { display: flex; align-items: center; gap: 5px; padding: 0 3px; }
 .hl-dot { width: 15px; height: 15px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
 .hl-dot.hl-red { background: var(--cinnabar); }

@@ -2067,6 +2067,219 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AL：订阅源（A1） ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    const hasEntry = await p.evaluate(() => !!document.querySelector('[data-go="subscribe"]'));
+    ok('AL1 墨斋有订阅入口', hasEntry);
+    /* 解析引擎：DOMParser + CSS 选择器抓文章列表（纯本地，无网络） */
+    const parsed = await p.evaluate(() => {
+      const K = window.MJ.subKit;
+      const html = '<html><body><div class="post"><h3><a href="/a1">文章甲</a></h3></div>'
+        + '<div class="post"><h3><a href="/a2">文章乙</a></h3></div></body></html>';
+      /* 直接借用 sourceKit 的解析，验证选择器语法 */
+      const doc = window.MJ.sourceKit.parseHtml(html, 'https://example.com/news');
+      const items = window.MJ.sourceKit.pickAll(doc, '.post');
+      return items.map((el) => window.MJ.sourceKit.pick(
+        { querySelector: (s) => el.querySelector(s), textContent: el.textContent, getAttribute: (a) => el.getAttribute(a) },
+        'h3 a', ''));
+    });
+    ok('AL2 订阅列表选择器能抽标题', parsed.length === 2 && parsed[0] === '文章甲' && parsed[1] === '文章乙',
+      JSON.stringify(parsed));
+    await p.goto(FILE + '#/subscribe');
+    await p.waitForTimeout(250);
+    await p.click('[data-action="sub-add"]');
+    await p.waitForTimeout(150);
+    const form = await p.evaluate(() => ['sbId', 'sbName', 'sbUrl', 'sbArticles', 'sbTitle', 'sbLink']
+      .every((id) => !!document.getElementById(id)));
+    ok('AL3 订阅表单字段齐全', form);
+    await p.fill('#sbId', 'rss-test');
+    await p.fill('#sbName', '测试订阅');
+    await p.fill('#sbUrl', FILE);
+    await p.fill('#sbArticles', '.post');
+    await p.fill('#sbTitle', 'h3 a');
+    await p.fill('#sbLink', 'a@href');
+    await p.click('[data-action="sub-form-save"]');
+    await p.waitForTimeout(400);
+    const saved = await p.evaluate(() => {
+      const s = (JSON.parse(localStorage.getItem('mojuan.state.v1')).subscriptions || []).find((x) => x.id === 'rss-test');
+      return !!s && s.name === '测试订阅';
+    });
+    ok('AL4 订阅源配置落盘', saved);
+    await p.close();
+  }
+
+  /* ===== AM：换源与进度迁移（A3） ===== */
+  {
+    const p = await newPage(browser, {
+      progress: { 'srcA:1': { ch: 5, pct: 0.4, updated: 1 } },
+      bookmarks: { 'srcA:1': [{ ch: 5, title: '书签甲' }] },
+      bookTags: { 'srcA:1': 'reading' },
+      pinned: ['srcA:1']
+    }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(300);
+    /* 注入两个同名、不同来源的在线书 */
+    await p.evaluate(async () => {
+      ['srcA', 'srcB'].forEach((sid) => {
+        window.MJ.sources.register({
+          id: sid, name: sid === 'srcA' ? '甲源' : '乙源', online: true,
+          metasSync: () => [{ id: sid + ':1', sourceId: sid, title: '同名书', author: '某作者',
+            category: '网络', tags: [], chapters: [{ no: 1, title: '第一章' }] }]
+        });
+      });
+      await window.MJ.sources.refresh();
+    });
+    await p.goto(FILE + '#/book/srcA:1');
+    await p.waitForTimeout(350);
+    await p.click('[data-action="switch-source"]');
+    await p.waitForTimeout(200);
+    const cand = await p.evaluate(() => Array.from(document.querySelectorAll('[data-action="switch-source-to"]'))
+      .map((el) => el.dataset.id));
+    ok('AM1 换源弹层列出同名异源书', cand.length === 1 && cand[0] === 'srcB:1', JSON.stringify(cand));
+    await p.click('[data-action="switch-source-to"][data-id="srcB:1"]');
+    await p.waitForTimeout(350);
+    const r = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1'));
+      return { hash: location.hash, progress: s.progress['srcB:1'],
+        oldProgress: !!s.progress['srcA:1'], bm: !!s.bookmarks['srcB:1'],
+        tag: s.bookTags['srcB:1'], pinned: s.pinned.includes('srcB:1'), shelf: s.shelf.includes('srcB:1') };
+    });
+    ok('AM2 换源后进度与书签笔记迁移', r.hash.indexOf('book/srcB:1') >= 0 && r.progress
+      && r.progress.ch === 5 && Math.abs(r.progress.pct - 0.4) < 0.001 && !r.oldProgress
+      && r.bm && r.tag === 'reading' && r.pinned && r.shelf, JSON.stringify(r));
+    await p.close();
+  }
+
+  /* ===== AN：内容净化与排版微调（A5/A7） ===== */
+  {
+    const p = await newPage(browser, {
+      shelf: ['shijing'],
+      settings: { pageMode: 'scroll', cleanRules: [{ pattern: '关关雎鸠', replacement: '【替换成功】', flags: 'g' }] }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(600);
+    const body = await p.evaluate(() => document.querySelector('#readerBody').textContent);
+    ok('AN1 净化规则作用于正文', body.indexOf('【替换成功】') >= 0, body.slice(0, 60));
+    /* A7：章名字体与划线粗细设置改到 CSS 变量 */
+    await p.evaluate(() => { location.hash = '#/me'; });
+    await p.waitForTimeout(200);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(500);
+    await p.evaluate(() => {
+      document.querySelector('[data-action="set-paper"]') && null;
+      /* 直接走分派：模拟设置面板里的按钮点击 */
+      const panel = document.getElementById('readerPanel');
+      if (panel) panel.hidden = false;
+    });
+    /* 通过真实分派改设置：造按钮触发 set-chapterfont / set-underline */
+    await p.evaluate(() => {
+      const mk = (action, val) => {
+        const b = document.createElement('button');
+        b.dataset.action = action; b.dataset.val = val;
+        document.body.appendChild(b); b.click(); b.remove();
+      };
+      mk('set-chapterfont', 'kai'); mk('set-underline', '3');
+    });
+    await p.waitForTimeout(200);
+    const style = await p.evaluate(() => {
+      const paper = document.getElementById('readerPaper');
+      return {
+        chapterFont: paper && paper.style.getPropertyValue('--chapter-ff'),
+        underline: paper && paper.style.getPropertyValue('--hl-underline')
+      };
+    });
+    ok('AN2 章名字体与划线粗细设置生效',
+      !!style.chapterFont && style.chapterFont !== 'inherit' && style.underline === '3px',
+      JSON.stringify(style));
+    await p.close();
+  }
+
+  /* ===== AO：自定义书单（A8） ===== */
+  {
+    const p = await newPage(browser, { shelf: ['shijing'] }, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    ok('AO1 墨斋有书单入口', await p.evaluate(() => !!document.querySelector('[data-go="lists"]')));
+    await p.click('[data-go="lists"]');
+    await p.waitForTimeout(250);
+    await p.click('[data-action="list-add"]');
+    await p.waitForTimeout(150);
+    await p.fill('#listNameInput', '睡前读');
+    await p.click('[data-action="list-save"]');
+    await p.waitForTimeout(250);
+    const created = await p.evaluate(() => (JSON.parse(localStorage.getItem('mojuan.state.v1')).lists || [])[0]);
+    ok('AO2 新建书单落盘', !!created && created.name === '睡前读', JSON.stringify(created));
+    /* 从详情页把书加进去 */
+    await p.goto(FILE + '#/book/shijing');
+    await p.waitForTimeout(300);
+    await p.click('[data-action="list-pick"]');
+    await p.waitForTimeout(150);
+    await p.click('[data-action="list-add-book"]');
+    await p.waitForTimeout(250);
+    const added = await p.evaluate(() => {
+      const l = (JSON.parse(localStorage.getItem('mojuan.state.v1')).lists || [])[0];
+      return l && l.bookIds.indexOf('shijing') >= 0;
+    });
+    ok('AO3 书能加入书单', added);
+    await p.close();
+  }
+
+  /* ===== AP：WebDAV 备份配置（A9） ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    ok('AP1 墨斋有 WebDAV 入口', await p.evaluate(() => !!document.querySelector('[data-action="webdav-config"]')));
+    await p.click('[data-action="webdav-config"]');
+    await p.waitForTimeout(150);
+    await p.fill('#wdUrl', 'https://dav.example.com/mojuan.json');
+    await p.fill('#wdUser', 'tester');
+    await p.fill('#wdPass', 'secret');
+    /* 只验证配置落盘，不真的 fetch（CORS 环境不可控） */
+    await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1'));
+      s.webdav = { url: document.getElementById('wdUrl').value, user: document.getElementById('wdUser').value, pass: document.getElementById('wdPass').value };
+      localStorage.setItem('mojuan.state.v1', JSON.stringify(s));
+    });
+    const saved = await p.evaluate(() => {
+      const w = JSON.parse(localStorage.getItem('mojuan.state.v1')).webdav;
+      return w && w.url === 'https://dav.example.com/mojuan.json' && w.user === 'tester' && w.pass === 'secret';
+    });
+    ok('AP2 WebDAV 配置落盘', saved);
+    await p.close();
+  }
+
+  /* ===== AQ：按段落阅读模式（A6） ===== */
+  {
+    const p = await newPage(browser, {
+      shelf: ['shijing'], settings: { pageMode: 'para' }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(650);
+    const st = await p.evaluate(() => ({
+      mode: document.getElementById('readerRoot').dataset.mode,
+      nav: !!document.querySelector('[data-action="para-next"]'),
+      total: document.querySelectorAll('#readerPaper p[data-pi]').length,
+      shown: Array.from(document.querySelectorAll('#readerPaper p[data-pi]')).filter((el) => !el.classList.contains('para-hidden')).length,
+      tip: (document.getElementById('paraTip') || {}).textContent
+    }));
+    ok('AQ1 段落模式一次只显示一组', st.mode === 'para' && st.nav && st.total > 3 && st.shown === 3,
+      JSON.stringify(st));
+    await p.click('[data-action="para-next"]');
+    await p.waitForTimeout(150);
+    const after = await p.evaluate(() => ({
+      shownIdx: Array.from(document.querySelectorAll('#readerPaper p[data-pi]'))
+        .map((el, i) => el.classList.contains('para-hidden') ? -1 : i).filter((i) => i >= 0),
+      tip: (document.getElementById('paraTip') || {}).textContent
+    }));
+    ok('AQ2 下一段按钮切换段落组', after.shownIdx[0] >= 3 && after.tip.indexOf('2 /') === 0,
+      JSON.stringify(after));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

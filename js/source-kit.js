@@ -158,4 +158,22 @@
 
   global.MJ = global.MJ || {};
   global.MJ.sourceKit = { fetchText, decode, parseHtml, pick, pickAll, clean, abs, makeSource };
+
+  /* 订阅源：和书源共用同一套抓取工具，只是抽「文章列表」而非「书目列表」。
+     同样不预置任何地址，规则由用户提供。 */
+  async function fetchArticles(cfg) {
+    if (!cfg || !cfg.url || /^file:/i.test(cfg.url)) return [];
+    const html = await fetchText(cfg.url, cfg.header ? JSON.parse(cfg.header) : null, cfg.timeout);
+    const doc = parseHtml(html, cfg.url);
+    const items = pickAll(doc, cfg.ruleArticles || 'a');
+    return items.map((el) => {
+      const mini = { querySelector: (s) => el.querySelector(s), querySelectorAll: (s) => el.querySelectorAll(s),
+        textContent: el.textContent, getAttribute: (a) => el.getAttribute(a) };
+      const title = pick(mini, cfg.ruleTitle || '', clean(el.textContent));
+      const href = pick(mini, cfg.ruleLink || 'a@href', el.getAttribute('href'));
+      if (!title) return null;
+      return { key: abs(href, cfg.url) || title, title, url: abs(href, cfg.url) };
+    }).filter(Boolean);
+  }
+  global.MJ.subKit = { fetchArticles };
 })(window);
