@@ -656,16 +656,27 @@ img, svg { display: block; }
   border-top: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent);
   box-shadow: 0 -10px 30px rgba(0, 0, 0, .08); animation: fadeUp .25s ease both;
 }
-.rs-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; font-family: var(--font-ui); font-size: 12.5px; }.rs-row > label { width: 40px; color: var(--reader-sub); flex: none; }
+/* 设置面板的文字要满足 AA 4.5:1：默认 --reader-sub 在面板底色上只有 3.5~4.4，
+   这里改用正文墨色（日间深 / 夜墨亮），对比度才够。active 药丸同理，
+   朱砂压在 soft 底上不足，改成 ink 描边 + 加粗强调，不再靠颜色深浅区分。 */
+.reader-settings {
+  --rs-label: var(--reader-ink); --rs-active: var(--reader-ink);
+  --rate-muted: var(--reader-sub); --rate-accent: var(--reader-ink);
+}
+/* 内嵌语速滑杆的预设按钮同样要跟随纸色，夜墨下全局朱砂只有 2.66:1 */
+.reader-settings .rate-preset.active { color: var(--reader-ink); border-color: var(--reader-ink); }
+.rs-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; font-family: var(--font-ui); font-size: 12.5px; }.rs-row > label { width: 40px; color: var(--rs-label); flex: none; }
 .rs-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .rs-pill { min-width: 44px; padding: 6px 9px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--reader-ink) 14%, transparent); font-size: 12.5px; }
-.rs-pill.active { border-color: var(--cinnabar); color: var(--cinnabar); background: var(--cinnabar-soft); }
+.rs-pill.active { border-color: var(--rs-active); color: var(--rs-active); background: color-mix(in srgb, var(--reader-ink) 8%, transparent); font-weight: 700; }
 /* 朗读语速滑杆 0.5× ~ 3× */
 .rate-box { flex: 1; min-width: 0; font-family: var(--font-ui); }
 /* 别用 opacity 淡化整行：它会被 .rate-val 继承，把朱砂读数冲到 2.88:1
    （AA 要 4.5）。改用 ink-2 直接定色，读数保持朱砂原色不淡化。 */
-.rate-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 1px; font-size: 11px; color: var(--ink-2); }
-.rate-val { font-family: var(--font-serif); font-size: 17px; font-weight: 700; color: var(--cinnabar); letter-spacing: .02em; }
+/* 语速面板两处用：墨斋设置里用全局 ink，阅读器设置里嵌着时用 reader 纸色变量。
+   夜墨纸下全局 --ink-2 是深色，对深底只有 2.68:1，必须跟随 reader-ink/reader-sub。 */
+.rate-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 1px; font-size: 11px; color: var(--rate-muted, var(--ink-2)); }
+.rate-val { font-family: var(--font-serif); font-size: 17px; font-weight: 700; color: var(--rate-accent, var(--cinnabar)); letter-spacing: .02em; }
 .rate-range {
   -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 24px;
   margin: 0; background: none; cursor: pointer; touch-action: none; outline: none; color: inherit;
@@ -687,7 +698,7 @@ img, svg { display: block; }
 .rate-range::-moz-range-track { height: 5px; border-radius: 5px; background: color-mix(in srgb, currentColor 16%, transparent); }
 .rate-range::-moz-range-progress { height: 5px; border-radius: 5px; background: var(--cinnabar); }
 .rate-range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--cinnabar); border: 2px solid var(--reader-bg, var(--paper-2)); }
-.rate-scale { display: flex; justify-content: space-between; margin-top: -3px; font-size: 10px; color: var(--ink-2); }
+.rate-scale { display: flex; justify-content: space-between; margin-top: -3px; font-size: 10px; color: var(--rate-muted, var(--ink-2)); }
 .rate-presets { display: flex; gap: 6px; margin-top: 9px; }
 .rate-preset {
   flex: 1; min-width: 0; padding: 5px 3px; border-radius: 7px; font-size: 11px; white-space: nowrap;

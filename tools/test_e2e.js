@@ -2280,6 +2280,27 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AR：新功能集成——阅读设置面板对比度 ===== */
+  {
+    for (const paper of ['xuan', 'night']) {
+      const p = await newPage(browser, {
+        shelf: ['shijing'], settings: { paper }
+      }, errs);
+      await p.goto(FILE + '#/reader/shijing/1');
+      await p.waitForTimeout(600);
+      await p.click('[data-action="reader-settings"]');
+      /* 面板逐行动画延迟到 .23s + .26s，等它落定再测，否则抓到半透明过渡色 */
+      await p.waitForTimeout(700);
+      await p.addScriptTag({ path: require('path').join(__dirname, 'axe.min.js') });
+      const n = await p.evaluate(async () => {
+        const r = await window.axe.run(document, { runOnly: ['color-contrast'] });
+        return r.violations.reduce((x, v) => x + v.nodes.length, 0);
+      });
+      ok('AR ' + paper + ' 设置面板文字对比度达标', n === 0, n + ' 处不足');
+      await p.close();
+    }
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

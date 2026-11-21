@@ -5886,7 +5886,13 @@
         break;
       }
       case 'sub-open': {
-        const a = (subCache[Object.keys(subCache).find((k) => (subCache[k] || []).some((x) => x.key === val))] || []).find((x) => x.key === val);
+        /* 按 key 直接找文章：从缓存的各订阅源列表里取，不靠 Object.keys 遍历
+           （错误条目存在 subCache[id+':error']，是字符串，some 会抛 TypeError）。 */
+        let a = null;
+        for (const sid of (state.subscriptions || []).map((s) => s.id)) {
+          const hit = (subCache[sid] || []).find((x) => x.key === val);
+          if (hit) { a = hit; break; }
+        }
         if (!a) break;
         state.subRead[val] = true; save();
         window.open(a.url, '_blank', 'noopener,noreferrer');
