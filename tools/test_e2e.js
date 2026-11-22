@@ -2301,6 +2301,47 @@ const TTS_MOCK = () => {
     }
   }
 
+  /* ===== AT：封面渲染 XSS（本地卷作者 / 印章） ===== */
+  {
+    const P = '<img src=x onerror="window.__xss=1">';
+    const p = await newPage(browser, {
+      localBooks: [{ id: 'evil', local: true, title: '恶意卷', author: P, seal: P,
+        category: '本地', status: '本地', tags: [], words: '1', chapters: [{ no: 1, title: '全' }], desc: 'x' }],
+      shelf: ['evil']
+    }, errs);
+    await p.addInitScript(() => { window.__xss = 0; });
+    for (const route of ['#/store', '#/shelf', '#/book/evil']) {
+      await p.goto(FILE + route);
+      await p.waitForTimeout(350);
+    }
+    const x = await p.evaluate(() => window.__xss);
+    ok('AT1 本地卷作者与印章不执行脚本', x === 0, 'xss=' + x);
+    await p.close();
+  }
+  {
+    /* AT2：所有用户可控字段同时注入，逐个页面确认没有漏网的插值点 */
+    const P = '<img src=x onerror="window.__xss=1">';
+    const evil = { id: 'evil', local: true, title: P, author: P, desc: P, seal: P,
+      category: P, status: P, words: P, tags: [P], color: '#000', color2: '#111',
+      chapters: [{ no: 1, title: P }], addedAt: 1 };
+    const p = await newPage(browser, {
+      shelf: ['evil'], lastRead: 'evil', progress: { evil: { ch: 1, pct: 0 } },
+      localBooks: [evil], bookTags: { evil: 'want' },
+      annotations: { evil: [{ ch: 1, pi: 0, text: P, note: P, color: 'red' }] },
+      subscriptions: [{ id: 's', name: P, url: 'x', enabled: true }],
+      lists: [{ id: 'l', name: P, bookIds: ['evil'] }]
+    }, errs);
+    await p.addInitScript(() => { window.__xss = 0; });
+    const hits = [];
+    for (const route of ['#/store', '#/shelf', '#/me', '#/book/evil', '#/reader/evil/1', '#/subscribe', '#/lists', '#/search']) {
+      await p.goto(FILE + route);
+      await p.waitForTimeout(250);
+      if (await p.evaluate(() => window.__xss)) hits.push(route);
+    }
+    ok('AT2 全字段注入八页面均无脚本执行', hits.length === 0, hits.join(','));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

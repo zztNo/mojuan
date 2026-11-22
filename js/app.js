@@ -734,14 +734,16 @@
     /* 竖排书名放不下就会顶出封面：六字起收字号，八字起再收一档 */
     const tlen = (b.title || '').length;
     const tcls = latin ? ' latin' : (tlen >= 8 ? ' xlong' : tlen >= 6 ? ' long' : '');
-    const pic = o.image && /^data:image\/(jpeg|png|webp);base64,/.test(o.image) ? o.image : null;
+    /* 只放行「合法前缀 + 纯 base64 字符」：原正则只校验开头，后面能拼 ' 闭合
+       background-image:url('...') 注入 CSS。base64 不含引号，整串白名单即可。 */
+    const pic = o.image && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(o.image) ? o.image : null;
     const art = pic
       ? `<div class="cover-photo" style="background-image:url('${pic}')"></div>`
       : D.motifSvg(o.motif || b.motif, o.color || b.color, o.color2 || b.color2, uid);
     const text = o.hideText ? '' : `<div class="cover-mark">墨卷藏书</div>
       <div class="cover-title${tcls}">${esc(b.title)}</div>
-      <div class="cover-author">${b.author}</div>
-      <div class="cover-seal">${o.seal || b.seal}</div>`;
+      <div class="cover-author">${esc(b.author)}</div>
+      <div class="cover-seal">${esc(o.seal || b.seal)}</div>`;
     return `<div class="cover ${pic ? 'has-photo' : ''}">${art}<i class="cover-grain" aria-hidden="true"></i>${text}</div>`;
   }
   /* ---------- 自定义封面 ---------- */
@@ -1385,7 +1387,7 @@
     return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}" data-sc="${esc((b.category || '').toLowerCase())}">
       <div class="cover-wrap">${coverHtml(b)}${badge}${pick}${quick}</div>
       <div class="book-name">${esc(b.title)}</div>
-      <div class="book-meta"><span class="bm-text">${b.author} · ${b.category}</span>${miniTags(b)}</div>
+      <div class="book-meta"><span class="bm-text">${esc(b.author)} · ${esc(b.category)}</span>${miniTags(b)}</div>
       ${prog}
     </div>`;
   }
@@ -1450,7 +1452,7 @@
     const lastTitle = (getBook(state.lastRead) || {}).title;
     const shelfSub = !shelf.length
       ? '还没有藏卷 · 去书肆挑一卷，或导入本地卷'
-      : `共藏 ${shelf.length} 卷 · ${lastTitle ? '最近读的是《' + lastTitle + '》' : '挑一卷，从今天读起'}`;
+      : `共藏 ${shelf.length} 卷 · ${lastTitle ? '最近读的是《' + esc(lastTitle) + '》' : '挑一卷，从今天读起'}`;
     let html = head('藏卷', 'MY SCROLLS', shelfSub, importBtn());
     /* 空着的时候不摆筛选和整理工具：没书可筛、可整理，摆出来只会让人以为操作坏了 */
     if (!shelf.length) {
@@ -1470,8 +1472,8 @@
         <div>${coverHtml(last)}</div>
         <div class="continue-info">
           <div class="muted" style="font-size:11px;letter-spacing:.16em;margin-bottom:6px">${begun ? '接 着 读' : '待 开 卷'}</div>
-          <h3>${last.title}</h3>
-          <div class="last">${chapterList(last)[Math.max(0, Math.min((pr.ch || 1) - 1, chapterList(last).length - 1))].title} · ${last.author}</div>
+          <h3>${esc(last.title)}</h3>
+          <div class="last">${esc(chapterList(last)[Math.max(0, Math.min((pr.ch || 1) - 1, chapterList(last).length - 1))].title)} · ${esc(last.author)}</div>
           <div class="progress-line"><i style="width:${Math.round(bp * 100)}%"></i></div>
           <div class="pct">${begun ? '已读 ' + pctText + '%　续卷' : '尚未开卷　开卷'} ${icon('right', 'ic-sm')}</div>
         </div>
@@ -1552,7 +1554,7 @@
       ${bannerArt(b, ui.banner)}
       <div style="position:absolute;inset:0;z-index:0;background:linear-gradient(90deg,rgba(12,16,14,.58) 30%,rgba(12,16,14,.08))"></div>
       <div class="banner-inner">
-        <div class="banner-tag">${b.tag}</div>
+        <div class="banner-tag">${esc(b.tag)}</div>
         <h2>${esc(b.title)}</h2><p>${esc(b.sub || '')}</p>
         <button class="btn btn-primary btn-sm" data-action="open-book" data-id="${b.book}">开卷细读 ${icon('right', 'ic-sm')}</button>
       </div>
@@ -1631,8 +1633,8 @@
           <div>${coverHtml(daily)}</div>
           <div>
             <div class="muted" style="font-size:11px;letter-spacing:.16em">DAILY PICK · 今 日 展 卷</div>
-            <h3>${daily.title}</h3><div class="byline">${daily.author} · ${daily.category} · ${daily.words}</div>
-            <p class="desc">${daily.desc}</p>
+            <h3>${esc(daily.title)}</h3><div class="byline">${esc(daily.author)} · ${esc(daily.category)} · ${esc(daily.words)}</div>
+            <p class="desc">${esc(daily.desc)}</p>
             <div style="display:flex;align-items:center;gap:12px">
               <span class="score" style="font-size:20px">${chapNum(daily)}</span><span class="muted" style="font-size:12px">篇 · ${daily.words}</span>
               <button class="btn btn-ghost btn-sm" style="margin-left:auto" data-action="${dailyInShelf ? 'open-book' : 'add-shelf'}" data-id="${daily.id}">${icon(dailyInShelf ? 'check' : 'plus', 'ic-sm')} ${dailyInShelf ? '已在藏卷' : '收入藏卷'}</button>
@@ -1954,18 +1956,18 @@
         <button class="btn btn-ghost btn-sm cover-edit-btn" data-action="open-cover" data-id="${b.id}">${icon('brush', 'ic-sm')} 换封面</button>
       </div>
       <div class="detail-info">
-        <div class="muted" style="font-size:11px;letter-spacing:.2em">${b.category} · ${b.status}</div>
+        <div class="muted" style="font-size:11px;letter-spacing:.2em">${esc(b.category)} · ${esc(b.status)}</div>
         <h1>${esc(b.title)}</h1>
-        <div class="detail-byline">${b.author} · ${b.local ? '本地导入' : (b.online ? '维基文库' : '墨卷公版')}</div>
+        <div class="detail-byline">${esc(b.author)} · ${b.local ? '本地导入' : (b.online ? '维基文库' : '墨卷公版')}</div>
         <div class="detail-stats">
           <div class="stat"><b>${chapters.length}</b><span>篇目</span></div>
-          <div class="stat"><b>${b.words}</b><span>总字数</span></div>
+          <div class="stat"><b>${esc(b.words)}</b><span>总字数</span></div>
           <div class="stat"><b>${b.local ? (b.tags[1] || 'TXT') : (b.online ? '在线' : '公版')}</b><span>${b.local ? '文件格式' : '卷源'}</span></div>
           <div class="stat"><b>${bp > 0 ? Math.max(1, Math.round(bp * 100)) + '%' : '—'}</b><span>已读</span></div>
         </div>
-        <p class="detail-desc ${ui.descOpen ? '' : 'clamp'}" id="bookDesc">${b.desc}</p>
+        <p class="detail-desc ${ui.descOpen ? '' : 'clamp'}" id="bookDesc">${esc(b.desc)}</p>
         <button class="link-more" style="align-self:flex-start;margin-bottom:14px" data-action="toggle-desc">${ui.descOpen ? '收起' : '展开简介'} ${icon('right', 'ic-sm')}</button>
-        <div class="detail-tags">${b.tags.map((t) => `<span class="tag">${t}</span>`).join('')}</div>
+        <div class="detail-tags">${(b.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
         <div class="detail-actions">
           <button class="btn btn-primary" data-action="start-read" data-id="${b.id}">${icon('book', 'ic-sm')} ${begun ? '续卷 · 第' + Math.min(chapters.length, pr.ch || 1) + '章' : '开卷'}</button>
           <button class="btn btn-ghost" data-action="${inShelf ? 'remove-shelf' : 'add-shelf'}" data-id="${b.id}">
@@ -1993,7 +1995,7 @@
                 <button class="btn btn-ghost btn-sm" data-action="retry-toc" data-id="${b.id}">${icon('refresh', 'ic-sm')} 重试</button></div>`
               : `<div class="toc-status">${icon('info', 'ic-sm')} 篇目开卷时联网取回</div>`))
           : `<ul class="chapter-preview">${chapters.slice(0, 6).map((c, i) =>
-          `<li data-action="open-chapter" data-id="${b.id}" data-ch="${i + 1}"><span style="color:var(--ink-2)">${c.title}</span><span>${i === 0 ? '卷首' : ''}</span></li>`).join('')}</ul>`}
+          `<li data-action="open-chapter" data-id="${b.id}" data-ch="${i + 1}"><span style="color:var(--ink-2)">${esc(c.title)}</span><span>${i === 0 ? '卷首' : ''}</span></li>`).join('')}</ul>`}
       </div>
       <div class="panel">
         <h3 role="heading" aria-level="2">关于此卷</h3>
@@ -2134,7 +2136,7 @@
       html += `<div class="section" id="localList">${sectionHead('本地卷册 · ' + state.localBooks.length, '', '')}
         <div class="setting-list">
           ${state.localBooks.map((b) => `<div class="setting-row">
-            <div class="local-thumb" style="background:${b.color}">${b.seal}</div>
+            <div class="local-thumb" style="background:${b.color}">${esc(b.seal)}</div>
             <div class="st" style="cursor:pointer" data-action="open-book" data-id="${b.id}">《${esc(b.title)}》<small>${b.chapters.length} 章 · ${esc(b.words || '')} · ${esc(b.author || '')}</small></div>
             <button class="btn btn-ghost btn-sm btn-danger" data-action="delete-local" data-id="${b.id}">删除</button>
           </div>`).join('')}
@@ -5481,7 +5483,7 @@
       : '点结果跳过去，之后可用「上一处 / 下一处」接着翻';
     box.innerHTML = `<div class="search-count">找到 ${hits.length} 处匹配<span class="sc-tip">${tip}</span></div>` + shown.map((h, i) =>
       `<button class="search-item" data-action="search-go" data-val="${i}">
-         <span class="si-ch">第 ${h.ch} 章</span><span class="si-frag">${h.frag}</span>
+         <span class="si-ch">第 ${h.ch} 章</span><span class="si-frag">${esc(h.frag)}</span>
        </button>`).join('');
   }
   /* 跳到第 i 处命中：跨章要等正文渲染完再定位，否则段落还不存在 */
