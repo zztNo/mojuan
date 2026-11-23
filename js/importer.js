@@ -355,6 +355,41 @@
     throw new Error('暂不支持 .' + ext + ' 格式，请导入 TXT、EPUB 或 HTML');
   }
 
+  /* 漫画导入：把用户自己的图片压成统一尺寸的 data URL。
+     只处理用户选中的本地图片，不联网、不抓取、不内置任何内容。 */
+  async function parseImages(files, onProgress) {
+    const list = Array.from(files || []).filter((f) => f && /^image\/(jpeg|png|webp|gif|bmp)$/i.test(f.type));
+    if (!list.length) throw new Error('请选择 JPG / PNG / WebP 图片');
+    list.sort((a, b) => {
+      const na = a.name, nb = b.name;
+      return na.localeCompare(nb, 'zh-CN', { numeric: true });
+    });
+    const images = [];
+    for (let i = 0; i < list.length; i++) {
+      if (onProgress) onProgress(i + 1, list.length);
+      const url = URL.createObjectURL(list[i]);
+      try {
+        const img = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im); im.onerror = () => rej(new Error('图片损坏：' + list[i].name));
+          im.src = url;
+        });
+        /* 长边 1400px，质量 0.72：一页漫画通常 100~200KB，几十页也不至于撑爆 */
+        const MAX = 1400;
+        const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        images.push(cv.toDataURL('image/jpeg', 0.72));
+      } finally { URL.revokeObjectURL(url); }
+    }
+    if (!images.length) throw new Error('没有可用的图片');
+    return { images, count: images.length };
+  }
+
   global.MJ = global.MJ || {};
-  global.MJ.importer = { parseFile, clean };
+  global.MJ.importer = { parseFile, clean, parseImages };
 })(window);

@@ -2629,6 +2629,72 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AZ：漫画阅读与听卷增强 ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    ok('AZ0 墨斋有漫画导入入口', await p.evaluate(() => !!document.querySelector('[data-action="import-comic"]')));
+    /* 造两张本地图片 */
+    const b64 = await p.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 120; c.height = 160;
+      const x = c.getContext('2d'); x.fillStyle = '#c33'; x.fillRect(0, 0, 120, 160);
+      return c.toDataURL('image/png').split(',')[1];
+    });
+    const buf = Buffer.from(b64, 'base64');
+    await p.locator('#imageFileInput').setInputFiles([
+      { name: 'a_1.png', mimeType: 'image/png', buffer: buf },
+      { name: 'a_2.png', mimeType: 'image/png', buffer: buf }
+    ]);
+    await p.waitForTimeout(1500);
+    const meta = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1'));
+      return s.localBooks[0] ? { kind: s.localBooks[0].kind, n: s.localBooks[0].chapters.length } : null;
+    });
+    ok('AZ1 图片导入成漫画卷', !!meta && meta.kind === 'comic' && meta.n === 2, JSON.stringify(meta));
+    const id = await p.evaluate(() => JSON.parse(localStorage.getItem('mojuan.state.v1')).localBooks[0].id);
+    await p.goto(FILE + '#/reader/' + id + '/1');
+    await p.waitForTimeout(800);
+    const render = await p.evaluate(() => ({
+      img: !!document.querySelector('#comicImg'), tools: !!document.querySelector('#comicTools')
+    }));
+    ok('AZ2 漫画页渲染图片与工具条', render.img && render.tools, JSON.stringify(render));
+    await p.click('[data-action="comic-zoom"][data-val="+"]');
+    await p.waitForTimeout(120);
+    const zoom = await p.evaluate(() => document.querySelector('#comicImg').dataset.zoom);
+    ok('AZ3 漫画缩放生效', zoom === '1.25', zoom);
+    await p.click('[data-action="comic-crop"]');
+    await p.waitForTimeout(120);
+    ok('AZ4 漫画切边可切换', await p.evaluate(() => document.querySelector('.comic-page').classList.contains('cropped')));
+    await p.close();
+  }
+  {
+    /* 听卷迷你条定时角标 */
+    const p = await newPage(browser, { shelf: ['shijing'], settings: { pageMode: 'scroll' } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(700);
+    await p.click('[data-action="toggle-tts"]');
+    await p.waitForTimeout(300);
+    const started = await p.evaluate(() => !!document.getElementById('listen'));
+    if (started) {
+      await p.evaluate(() => {
+        const x = document.createElement('button');
+        x.dataset.action = 'listen-timer'; x.dataset.val = '30';
+        document.body.appendChild(x); x.click(); x.remove();
+      });
+      await p.waitForTimeout(150);
+      await p.click('[data-action="listen-minimize"]');
+      await p.waitForTimeout(150);
+    }
+    const timer = await p.evaluate(() => {
+      const el = document.getElementById('lmTimer');
+      return el ? { exists: true, hidden: el.hidden, text: el.textContent } : { exists: false };
+    });
+    ok('AZ5 听卷迷你条显示定时剩余', started && timer.exists && !timer.hidden && timer.text.indexOf('分') >= 0,
+      JSON.stringify({ started, timer }));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

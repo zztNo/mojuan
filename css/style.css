@@ -803,6 +803,25 @@ img, svg { display: block; }
 .tl-items { display: flex; flex-direction: column; gap: 4px; }
 .tl-item { font-size: 12px; color: var(--ink-2); }
 .tl-item i { font-style: normal; font-family: var(--font-ui); color: var(--ink-3); margin-right: 8px; }
+/* 漫画阅读：一图一页，缩放/切边 */
+.reader-paper:has(.comic-page) { padding: 0; }
+.comic-page { width: 100%; overflow: hidden; text-align: center; background: var(--reader-bg); }
+.comic-page img {
+  display: inline-block; max-width: 100%; width: 100%; height: auto;
+  transform-origin: top center; transition: transform .18s ease;
+}
+.comic-page.cropped img { width: auto; max-width: none; height: 100vh; object-fit: cover; object-position: center; }
+.comic-tools {
+  position: sticky; bottom: 0; z-index: 4; display: flex; justify-content: center; gap: 8px;
+  padding: 8px; background: color-mix(in srgb, var(--reader-bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+}
+/* 迷你播放条上的定时剩余角标 */
+.lm-timer {
+  position: absolute; top: -6px; right: -6px; padding: 1px 5px; border-radius: 8px;
+  background: var(--cinnabar); color: #fff; font: 600 10px var(--font-ui);
+  box-shadow: 0 1px 3px rgba(0,0,0,.25); white-space: nowrap;
+}
 /* 按段落阅读：一次只显示一组，上下按钮翻组 */
 .reader-paper p.para-hidden { display: none; }
 .para-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 24px 0 8px; }

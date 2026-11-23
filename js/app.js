@@ -313,6 +313,13 @@
   let prefetchCancel = null;
   function prefetchNext(b, ch) {
     if (prefetchCancel) { prefetchCancel(); prefetchCancel = null; }
+    /* 漫画卷：下一图提前解码，翻页时不白屏 */
+    if (b && b.kind === 'comic') {
+      const imgs = (contentCache[b.id] || {}).images || [];
+      const next = imgs[Number(ch)];
+      if (next) { const im = new Image(); im.src = next; }
+      return;
+    }
     if (!b || b.local || !b.online) return;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if (document.hidden) return;
@@ -937,6 +944,53 @@ MJ.sources.register({
     return text.split('\\n').map(s => s.trim()).filter(Boolean);
   }
 });`;
+  /* 漫画卷：把用户自己的图片合成一卷，图片存 IndexedDB，不上传、不抓取。 */
+  async function importComicFiles(fileList) {
+    if (importing) { toast('正在导入，请稍候'); return; }
+    const files = Array.from(fileList || []).filter((f) => f && /^image\//i.test(f.type) && f.size > 0);
+    if (!files.length) { toast('请选择 JPG / PNG / WebP 图片'); return; }
+    importing = true;
+    try {
+      toast('正在整理图片…（0 / ' + files.length + '）');
+      const r = await MJ.importer.parseImages(files, (i, n) => {
+        if (i % 5 === 0 || i === n) toast('正在压缩图片…（' + i + ' / ' + n + '）');
+      });
+      const now = Date.now();
+      const id = 'local-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+      const base = (files[0].name.replace(/\.[^.]+$/, '') || '图片卷').slice(0, 20);
+      const cleanMeta = (v) => String(v || '').replace(/[<>&]/g,
+        (c) => ({ '<': '〈', '>': '〉', '&': '＆' }[c]));
+      const title = cleanMeta(base) || '我的图片卷';
+      /* 章节标题用「第 N 图」，正文放一个占位段；阅读器识别 kind 后改画图片 */
+      /* paragraphs() 对 local 书取 rec.chapters[idx].paras，所以每章都要带 paras */
+      const chapters = r.images.map((_, i) => ({
+        title: '第 ' + (i + 1) + ' 图', paras: ['（漫画页）']
+      }));
+      const pal = LOCAL_COLORS[(state.localBooks || []).length % LOCAL_COLORS.length];
+      const meta = {
+        id, local: true, kind: 'comic', title, author: '我的图片',
+        category: '漫画', status: '本地', tags: ['本地导入', '图片'],
+        words: r.count + ' 图', score: 9, readers: '本机', hot: 60,
+        motif: LOCAL_MOTIFS[0], color: pal[0], color2: pal[1],
+        seal: title.charAt(0), desc: '由 ' + r.count + ' 张本地图片组成，内容只存在这台设备上。',
+        chapters: chapters.map((c) => c.title), addedAt: now
+      };
+      await saveContent(id, { id, kind: 'comic', chapters, images: r.images });
+      contentCache[id] = { id, kind: 'comic', chapters, images: r.images };
+      state.localBooks = state.localBooks || [];
+      state.localBooks.unshift(meta);
+      if (!state.shelf.includes(id)) state.shelf.unshift(id);
+      state.progress[id] = { ch: 1, pct: 0, updated: now };
+      /* 第一张当封面，压缩过的 dataURL 已经是小图 */
+      state.covers[id] = { image: r.images[0] }; markCoversDirty();
+      save(); renderNav(ui.nav);
+      toast('已导入《' + title + '》· ' + r.count + ' 张图片');
+      go('book/' + id);
+    } catch (e) {
+      toast('图片导入失败：' + (e && e.message ? e.message : '未知错误'));
+    } finally { importing = false; }
+  }
+
   /* A2 配套：把当前所有自定义书源导出成 JSON，便于备份 / 分享 / 换机迁移。 */
   function exportSources() {
     const list = customSources();
@@ -2514,6 +2568,7 @@ MJ.sources.register({
     html += `<div class="section">${sectionHead('其他', '', '')}
       <div class="setting-list">
         <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD / HTML，支持多选</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="import-comic">${icon('grid')}<div class="st">导入图片成漫画卷<small>选自己电脑里的 JPG / PNG / WebP，按顺序合成一卷；内容只存本机</small></div>${icon('right', 'ic-sm')}</div>
         ${state.localBooks.length ? `<div class="setting-row" data-action="go-local-list">${icon('trash')}<div class="st">整理 / 删除已导入的卷<small>已导入 ${state.localBooks.length} 本，可单本删除；藏卷里长按卷册可批量理卷</small></div>${icon('right', 'ic-sm')}</div>` : ''}
         <div class="setting-row" data-action="go-shelf">${icon('shelf')}<div class="st">管理我的藏卷</div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-go="subscribe">${icon('book')}<div class="st">我的订阅<small>自己接的网页列表 · 仅用于公版与你有权使用的资源</small></div>${icon('right', 'ic-sm')}</div>
@@ -2544,8 +2599,12 @@ MJ.sources.register({
     const pr = state.progress[b.id] || { ch: 1, pct: 0 };
     const pct = pr.ch === ch ? pr.pct : 0;
     const errMsg = chapterErrMsg(b, ch);
+    /* 漫画卷一次一图，不走文字分页；图片从内容记录里取 */
+    const isComic = b.kind === 'comic';
+    const comicImg = isComic && contentCache[b.id]
+      ? (contentCache[b.id].images || [])[ch - 1] : null;
     /* 只有一句提示时分页没有意义，直接走滚动布局 */
-    const flip = state.settings.pageMode === 'flip' && !errMsg;
+    const flip = state.settings.pageMode === 'flip' && !errMsg && !isComic;
     const errBlock = `<div class="reader-error">
             ${icon('info', 'ic-lg')}
             <p>${esc(errMsg)}</p>
@@ -2563,7 +2622,18 @@ MJ.sources.register({
       : `<div class="reader-paper" id="readerPaper">
           <div class="reader-chapter-no">${esc(b.title)} · ${esc(b.author)}</div>
           <h1>${esc(cur.title)}</h1>
-          ${errMsg ? errBlock : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${highlightHtml(p, b.id, ch, j, hidx)}</p>`).join('')}
+          ${errMsg ? errBlock : (isComic
+            ? `<div class="comic-page" data-ch="${ch}">
+                ${comicImg ? `<img id="comicImg" src="${comicImg}" alt="第 ${ch} 图" draggable="false">`
+                  : '<div class="reader-error"><p>这一图没能读取，请重新导入这卷</p></div>'}
+               </div>
+               <div class="comic-tools" id="comicTools">
+                 <button class="btn btn-ghost btn-sm" data-action="comic-zoom" data-val="-" title="缩小">−</button>
+                 <button class="btn btn-ghost btn-sm" data-action="comic-zoom" data-val="fit" title="适应宽度">适应</button>
+                 <button class="btn btn-ghost btn-sm" data-action="comic-zoom" data-val="+" title="放大">＋</button>
+                 <button class="btn btn-ghost btn-sm" data-action="comic-crop" title="切边：跳过留白">切边</button>
+               </div>`
+            : paras.map((p, j) => `<p class="${p.indexOf('（本章完') === 0 ? 'end-note' : ''}" data-pi="${j}">${highlightHtml(p, b.id, ch, j, hidx)}</p>`).join(''))}
           ${notes.length && !errMsg ? `<button class="ch-notes-entry" data-action="open-notes">${icon('list', 'ic-sm')} 注释 · ${notes.length} 条</button>` : ''}
           ${state.settings.pageMode === 'para' ? `<div class="para-nav">
             <button class="btn btn-ghost btn-sm" data-action="para-prev">${icon('left', 'ic-sm')} 上一段</button>
@@ -4060,6 +4130,13 @@ MJ.sources.register({
       play.setAttribute('aria-label', listen.playing ? '暂停' : '播放');
     }
     const lmPlay = $('#lmPlay'); if (lmPlay) lmPlay.innerHTML = icon(listen.playing ? 'pause' : 'play');
+    /* 迷你条常显定时剩余：后台听书时不用展开就知道还有多久停 */
+    const lmTimer = $('#lmTimer');
+    if (lmTimer) {
+      const on = !!listen.timerMin && !!listen.timerAt;
+      lmTimer.hidden = !on;
+      if (on) lmTimer.textContent = listen.fadeOut ? '收尾' : '⏱' + Math.max(1, Math.ceil((listen.timerAt - Date.now()) / 60000)) + '分';
+    }
     const lyric = $('#listenLyric'); if (lyric) lyric.textContent = listen.paras[listen.paraIndex] || '';
     const cover = $('#listenCover'); if (cover) cover.classList.toggle('playing', listen.playing);
     /* 章名跟着 listen.ch 走：换章取回期间至少让人看见「在取哪一章」 */
@@ -4670,6 +4747,7 @@ MJ.sources.register({
       <div class="lm-ball" data-action="listen-expand" title="展开听卷">
         <div class="lm-cover">${coverHtml(b)}</div>
         <button class="lm-play" data-action="listen-toggle" id="lmPlay" title="播放 / 暂停">${icon(listen.playing ? 'pause' : 'play')}</button>
+        <span class="lm-timer" id="lmTimer" hidden></span>
       </div>
     </div>`;
   }
@@ -5305,7 +5383,7 @@ MJ.sources.register({
     const prevMode = readerRoot.dataset.mode;
     const prevCh = readerRoot.dataset.currentCh;
     /* 同一本书、同样是翻页模式时换章：只重算分页，不重建 DOM，省掉「正在分页」占位帧 */
-    let canReuse = flipMode && prevBook === id && prevMode === 'flip' && !!$('#reader') && !!$('#flipPage');
+    let canReuse = flipMode && b.kind !== 'comic' && prevBook === id && prevMode === 'flip' && !!$('#reader') && !!$('#flipPage');
     readerRoot.dataset.currentBook = id;
     /* 在线书的章目是懒取的，此刻只有「开卷取回」占位，不能拿它来钳制章号 */
     const placeholder = b.online && chapterList(b).length <= 1;
@@ -6085,6 +6163,21 @@ MJ.sources.register({
     switch (a) {
       case 'open-search': go('search'); break;
       case 'import-books': $('#fileInput').click(); break;
+      case 'import-comic': $('#imageFileInput').click(); break;
+      case 'comic-zoom': {
+        const img = $('#comicImg'); if (!img) break;
+        const cur = Number(img.dataset.zoom || 1);
+        let z = val === 'fit' ? 1 : (val === '+' ? Math.min(3, cur + 0.25) : Math.max(0.5, cur - 0.25));
+        img.dataset.zoom = String(z);
+        img.style.transform = 'scale(' + z + ')';
+        break;
+      }
+      case 'comic-crop': {
+        const pg = $('.comic-page'); if (!pg) break;
+        pg.classList.toggle('cropped');
+        toast(pg.classList.contains('cropped') ? '切边模式：铺满屏幕' : '适应宽度');
+        break;
+      }
       case 'export-backup': exportBackup(); break;
       case 'clean-covers': {
         /* 只掉图片，保留每本书选过的底纹 / 配色 / 印章，封面还会按原风格重新生成，
@@ -7399,6 +7492,10 @@ MJ.sources.register({
   /* ---------- 文件选择 / 拖放导入 ---------- */
   $('#fileInput').addEventListener('change', (e) => {
     if (e.target.files && e.target.files.length) importFiles(e.target.files);
+    e.target.value = '';
+  });
+  $('#imageFileInput').addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length) importComicFiles(e.target.files);
     e.target.value = '';
   });
   $('#backupFileInput').addEventListener('change', (e) => {
