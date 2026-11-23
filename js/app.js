@@ -814,7 +814,10 @@
 
   /* ---------- 书源：自定义插件 ---------- */
   const CUSTOM_SRC_KEY = 'mojuan.sources.custom';
-  const SOURCE_SKELETON = `MJ.sources.register({
+  const SOURCE_SKELETON = `/* 这是示例骨架，直接保存只会得到一本取不到正文的空壳书。
+   请把 id/name、metas 里的书目、getChapter 的请求地址都换成你自己的。
+   如果只是想接一个网页书单，用「添加书源（可视化）」填地址与选择器即可。 */
+MJ.sources.register({
   id: 'my-source',
   name: '我的书源',
   desc: '一句话说明这个书源',
@@ -822,7 +825,7 @@
   async metas() {
     // 返回书目元数据数组，可在这里请求你自己的接口
     return [{
-      id: 'my-1', title: '书名', author: '作者', category: '文集',
+      id: 'my-1', title: '书名', author: '作者', category: '文集', status: '自定义',
       desc: '简介', words: '1.0万', score: 9.0, readers: '本机',
       tags: ['自定义'], chapters: [{ no: 1, title: '全文' }]
     }];
@@ -832,11 +835,94 @@
     return text.split('\\n').map(s => s.trim()).filter(Boolean);
   }
 });`;
+  /* A2 配套：把当前所有自定义书源导出成 JSON，便于备份 / 分享 / 换机迁移。 */
+  function exportSources() {
+    const list = customSources();
+    if (!list.length) { toast('还没有自定义书源可导出'); return; }
+    const payload = { app: 'mojuan-sources', version: 1, exportedAt: new Date().toISOString(), sources: list };
+    const ok = downloadText('墨卷书源-' + today() + '.json', JSON.stringify(payload, null, 2));
+    toast(ok ? '已导出 ' + list.length + ' 个书源' : '导出失败，请检查下载权限');
+  }
+
+  /* 解析导入的书源 JSON：认墨卷自己的导出格式、纯配置数组 / 单个配置。
+     legado 原生书源规则依赖 App 宿主 API，浏览器跑不了，明确提示而不假装支持。 */
+  function parseSourceImport(text) {
+    let data;
+    try { data = JSON.parse(String(text).replace(/^\uFEFF/, '')); }
+    catch (e) { throw new Error('不是有效的 JSON 文件'); }
+    const arr = Array.isArray(data) ? data
+      : (data && Array.isArray(data.sources) ? data.sources
+        : (data && typeof data === 'object' ? [data] : []));
+    if (!arr.length) throw new Error('文件里没有书源配置');
+    const CFG_KEYS = ['listUrl', 'bookList', 'bookTitle', 'bookLink', 'chapterList', 'content', 'ruleArticles'];
+    const visual = arr.filter((x) => x && typeof x === 'object' && CFG_KEYS.some((k) => k in x));
+    if (visual.length && visual.length === arr.length) {
+      return visual.map((c) => ({
+        id: String(c.id || '').trim(), name: String(c.name || '').trim(),
+        group: String(c.group || ''), desc: String(c.desc || '导入的书源'),
+        listUrl: String(c.listUrl || ''), bookList: String(c.bookList || ''),
+        bookTitle: String(c.bookTitle || ''), bookLink: String(c.bookLink || ''),
+        chapterList: String(c.chapterList || ''), content: String(c.content || ''),
+        defaultAuthor: String(c.defaultAuthor || ''), replaceRegex: String(c.replaceRegex || ''),
+        ruleArticles: String(c.ruleArticles || ''), ruleTitle: String(c.ruleTitle || ''),
+        ruleLink: String(c.ruleLink || ''), url: String(c.url || '')
+      }));
+    }
+    if (arr.some((x) => x && (x.bookSourceName || x.ruleSearch || x.bookSourceUrl))) {
+      throw new Error('这是阅读 App 的规则书源，依赖 App 内置脚本环境，浏览器里无法运行；请用「可视化」方式自己配地址与选择器');
+    }
+    throw new Error('没有识别到墨卷书源配置（需要含 listUrl / bookList / content 等字段）');
+  }
+
   function customSources() {
     try { return JSON.parse(localStorage.getItem(CUSTOM_SRC_KEY) || '[]'); } catch (e) { return []; }
   }
   function saveCustomSources(list) {
     try { localStorage.setItem(CUSTOM_SRC_KEY, JSON.stringify(list)); } catch (e) { /* 忽略 */ }
+  }
+
+  async function importSourceJson(file) {
+    let cfgs;
+    try {
+      const txt = await file.text();
+      cfgs = parseSourceImport(txt);
+    } catch (e) { toast('书源导入失败：' + (e.message || '格式不对')); return; }
+    let nBook = 0, nSub = 0, bad = 0;
+    const codes = customSources();
+    for (const c of cfgs) {
+      /* 订阅源配置：有 url + ruleArticles，没有 listUrl */
+      if (c.url && c.ruleArticles && !c.listUrl) {
+        if (!c.id || !c.name) { bad += 1; continue; }
+        state.subscriptions = state.subscriptions || [];
+        const i = state.subscriptions.findIndex((s) => s.id === c.id);
+        const sub = { id: c.id, name: c.name, url: c.url, ruleArticles: c.ruleArticles, enabled: true };
+        if (c.ruleTitle) sub.ruleTitle = c.ruleTitle;
+        if (c.ruleLink) sub.ruleLink = c.ruleLink;
+        if (i >= 0) state.subscriptions[i] = Object.assign({}, state.subscriptions[i], sub);
+        else state.subscriptions.push(sub);
+        nSub += 1;
+        continue;
+      }
+      /* 书籍书源：必须有 id / name / listUrl */
+      if (!c.id || !c.name || !c.listUrl) { bad += 1; continue; }
+      if (!/^[a-zA-Z0-9_-]+$/.test(c.id)) {
+        c.id = 'src-' + c.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'src-' + Date.now().toString(36);
+      }
+      const code = '/* mj-visual:' + c.id + ' */MJ.sources.register(MJ.sourceKit.makeSource('
+        + JSON.stringify(c) + '));';
+      const r = runSourceCodeSafe(code);
+      if (r.err) { bad += 1; continue; }
+      const mark = '/* mj-visual:' + c.id + ' */';
+      const at = codes.findIndex((x) => x.indexOf(mark) === 0);
+      if (at >= 0) codes[at] = code; else codes.push(code);
+      nBook += 1;
+    }
+    saveCustomSources(codes);
+    save();
+    await SRC.refresh();
+    renderNav(ui.nav); rerender();
+    toast('书源导入完成：' + nBook + ' 个书源' + (nSub ? ' · ' + nSub + ' 个订阅' : '')
+      + (bad ? ' · ' + bad + ' 个跳过（缺字段）' : ''));
   }
   /* 记住被关掉的书源，下次打开还是关着的 */
   const OFF_SRC_KEY = 'mojuan.sources.off';
@@ -1956,7 +2042,7 @@
         <button class="btn btn-ghost btn-sm cover-edit-btn" data-action="open-cover" data-id="${b.id}">${icon('brush', 'ic-sm')} 换封面</button>
       </div>
       <div class="detail-info">
-        <div class="muted" style="font-size:11px;letter-spacing:.2em">${esc(b.category)} · ${esc(b.status)}</div>
+        <div class="muted" style="font-size:11px;letter-spacing:.2em">${esc(b.category || '未分类')} · ${esc(b.status || '来自书源')}</div>
         <h1>${esc(b.title)}</h1>
         <div class="detail-byline">${esc(b.author)} · ${b.local ? '本地导入' : (b.online ? '维基文库' : '墨卷公版')}</div>
         <div class="detail-stats">
@@ -2249,6 +2335,8 @@
         }).join('')}
         <div class="setting-row" data-action="add-source">${icon('plus')}<div class="st">添加书源（可视化）<small>填网页地址与选择器即可，不需要写代码；仅用于公版或你有权使用的资源</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="add-source-js">${icon('brush')}<div class="st">添加书源（JS 插件）<small>高级用法：自己写 MJ.sources.register 代码，完全自定义取书逻辑</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="import-source-json">${icon('book')}<div class="st">导入书源 / 订阅 JSON<small>选一个 .json 文件批量导入书源与订阅配置</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="export-sources">${icon('brush')}<div class="st">导出书源<small>把自定义书源存成 JSON，方便备份或换机</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
     html += `<div class="section">${sectionHead('其他', '', '')}
       <div class="setting-list">
@@ -5908,6 +5996,8 @@
       }
       case 'add-source': openSourceForm(); break;
       case 'add-source-js': openSourceEditor(); break;
+      case 'import-source-json': $('#sourceFileInput').click(); break;
+      case 'export-sources': exportSources(); break;
       case 'source-edit': openSourceForm(id); break;
       case 'source-switch-js': {
         const g = (sid) => ($('#' + sid) || {}).value || '';
@@ -7006,6 +7096,11 @@
       fr.onerror = () => toast('备份文件读取失败');
       fr.readAsText(f, 'utf-8');
     }
+    e.target.value = '';
+  });
+  $('#sourceFileInput').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) importSourceJson(f);
     e.target.value = '';
   });
   /* 封面图片选择器常驻，避免每次打开编辑器重复创建 */

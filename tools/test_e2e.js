@@ -2342,6 +2342,52 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AU：书源 JSON 导入 / 导出 + 模板空壳兜底 ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    ok('AU1 墨斋有书源导入导出入口', await p.evaluate(() =>
+      !!document.querySelector('[data-action="import-source-json"]')
+      && !!document.querySelector('[data-action="export-sources"]')));
+    const payload = JSON.stringify({ app: 'mojuan-sources', version: 1, sources: [
+      { id: 'imp1', name: '导入书源', group: '测试', listUrl: FILE,
+        bookList: '.b', bookTitle: 'h3', content: '#c' },
+      { id: 'rss1', name: '导入订阅', url: FILE,
+        ruleArticles: '.post', ruleTitle: 'h3', ruleLink: 'a@href' }
+    ] });
+    await p.locator('#sourceFileInput').setInputFiles({ name: 's.json', mimeType: 'application/json', buffer: Buffer.from(payload) });
+    await p.waitForTimeout(700);
+    const r = await p.evaluate(() => ({
+      src: !!window.MJ.sources.get('imp1'),
+      cfg: !!(window.MJ.sources.get('imp1') || {})._cfg,
+      subs: JSON.parse(localStorage.getItem('mojuan.state.v1')).subscriptions.map((s) => s.id)
+    }));
+    ok('AU2 导入书源与订阅配置', r.src && r.cfg && r.subs.indexOf('rss1') >= 0, JSON.stringify(r));
+    /* legado 原生规则要给明确提示，不能静默失败 */
+    await p.locator('#sourceFileInput').setInputFiles({ name: 'l.json', mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify([{ bookSourceName: '起点', bookSourceUrl: 'x', searchUrl: '@js:x', ruleSearch: {} }])) });
+    await p.waitForTimeout(350);
+    const tip = await p.evaluate(() => document.querySelector('#toast').textContent);
+    ok('AU3 legado 规则书源给明确提示', tip.indexOf('阅读 App 的规则书源') >= 0, tip);
+    await p.close();
+  }
+  {
+    /* 模板空壳：直接保存后详情不应出现 undefined */
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    await p.click('[data-action="add-source-js"]');
+    await p.waitForTimeout(150);
+    await p.click('[data-action="source-save"]');
+    await p.waitForTimeout(500);
+    await p.goto(FILE + '#/book/my-source:my-1');
+    await p.waitForTimeout(300);
+    const txt = await p.evaluate(() => document.body.textContent);
+    ok('AU4 示例书源详情不出现 undefined', txt.indexOf('undefined') < 0);
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
