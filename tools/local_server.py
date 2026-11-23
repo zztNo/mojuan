@@ -90,8 +90,8 @@ class MojuanHandler(SimpleHTTPRequestHandler):
                 final_url = resp.geturl()
                 status = resp.status
             text = decode_body(raw, ctype)
-            sys.stderr.write('[proxy] -> %s | %d bytes | %s\n' % (
-                final_url, len(text), text[:30].replace('\n', ' ')))
+            # 只记目标地址与字节数，不记正文内容：正文可能含用户信息，不写进日志
+            sys.stderr.write('[proxy] -> %s | %d bytes\n' % (final_url, len(text)))
             self._json(200, {'text': text, 'url': final_url, 'status': status})
         except urllib.error.HTTPError as e:
             self._json(502, {'error': '目标站返回 HTTP ' + str(e.code), 'status': e.code})
