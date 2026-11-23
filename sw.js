@@ -1,6 +1,6 @@
-// content-hash: 7594483b15ab
+// content-hash: a000f1a5efc9
 /* 墨卷 · 离线缓存 */
-const CACHE = 'mojuan-v102';
+const CACHE = 'mojuan-v103';
 const ASSETS = [
   './',
   './index.html',
@@ -54,6 +54,9 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  /* 本地代理请求必须绕过缓存：每个 ?url= 都是不同的目标网页，
+     而下面的 caches.match 用了 ignoreSearch，会把不同 url 当成同一条缓存。 */
+  if (new URL(req.url).pathname.endsWith('/proxy')) return;
   const network = fetch(req).then((res) => {
     if (res && res.ok) {
       const copy = res.clone();

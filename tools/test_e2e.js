@@ -2388,6 +2388,29 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AV：本地代理配置 ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(350);
+    ok('AV1 墨斋有代理地址入口', await p.evaluate(() => !!document.getElementById('proxyUrlInput')));
+    await p.fill('#proxyUrlInput', 'http://127.0.0.1:8899');
+    await p.click('[data-action="proxy-save"]');
+    await p.waitForTimeout(200);
+    const r = await p.evaluate(() => ({
+      kit: window.MJ.sourceKit.getProxy(),
+      state: JSON.parse(localStorage.getItem('mojuan.state.v1')).proxyUrl
+    }));
+    ok('AV2 代理地址写入状态与工具箱', r.kit === 'http://127.0.0.1:8899' && r.state === r.kit, JSON.stringify(r));
+    /* 非法地址要拒绝 */
+    await p.fill('#proxyUrlInput', '127.0.0.1:8899');
+    await p.click('[data-action="proxy-save"]');
+    await p.waitForTimeout(150);
+    ok('AV3 非法代理地址被拒绝', await p.evaluate(() =>
+      JSON.parse(localStorage.getItem('mojuan.state.v1')).proxyUrl === 'http://127.0.0.1:8899'));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

@@ -432,9 +432,13 @@
     /* 自定义书单：用户自己命名的书 grouping */
     lists: [],
     /* WebDAV 备份配置：密码存在本机浏览器里，请勿在公用设备使用 */
-    webdav: { url: '', user: '', pass: '' }
+    webdav: { url: '', user: '', pass: '' },
+    /* 本地代理地址：配合 tools/local_server.py，让书源能取回跨域网页 */
+    proxyUrl: ''
   };
   let state = load();
+  /* 本地代理：启动时把配置同步给解析工具箱，让书源/订阅请求能走它 */
+  if (globalThis.MJ && MJ.sourceKit) MJ.sourceKit.setProxy(state.proxyUrl);
   /* 数据迁移，按版本号各跑一次。
    * v2：老版本存的是虚构书 id（b01…），换成真实书源后取不到书，清掉。
    *     只认「形如 b01 的旧 id」，不按"此刻取不到书"判断——自定义书源临时停用、
@@ -496,6 +500,7 @@
         subRead: Object.assign({}, DEFAULTS.subRead, (raw || {}).subRead || {}),
         lists: Array.isArray((raw || {}).lists) ? raw.lists : [],
         webdav: Object.assign({}, DEFAULTS.webdav, (raw || {}).webdav || {}),
+        proxyUrl: String((raw || {}).proxyUrl || ''),
         readLog: Object.assign({}, DEFAULTS.readLog, (raw || {}).readLog || {})
       });
     } catch (e) { return structuredClone(DEFAULTS); }
@@ -556,6 +561,7 @@
     }
   }
   function save() {
+    if (globalThis.MJ && MJ.sourceKit) MJ.sourceKit.setProxy(state.proxyUrl);
     /* 封面图跟进度、笔记挤在同一个键里有两个坏处：
        ① 每翻一页存档都要把几 MB 的 base64 重新 stringify 一遍；
        ② 封面把配额占满后整份 setItem 抛异常，连「读到第几页」都一起存不进去，
@@ -2321,6 +2327,11 @@ MJ.sources.register({
       </div></div>`;
     html += `<div class="section">${sectionHead('书源', '', '')}
       <div class="setting-list">
+        <div class="setting-row proxy-row">
+          ${icon('settings')}<div class="st">本地代理地址<small>填 tools/local_server.py 的地址（如 http://127.0.0.1:8899），书源才能取回跨域网页。仅转发你指定的地址，内容不过第三方。</small>
+            <div class="proxy-input-row"><input id="proxyUrlInput" value="${esc(state.proxyUrl || '')}" placeholder="http://127.0.0.1:8899" spellcheck="false"><button class="btn btn-ghost btn-sm" data-action="proxy-save">保存</button></div>
+          </div>
+        </div>
         ${SRC.list().map((s) => {
           const n = SRC.allBooks().filter((b) => b.sourceId === s.id).length;
           const group = s.group ? ' · ' + esc(s.group) : '';
@@ -5996,6 +6007,15 @@ MJ.sources.register({
       }
       case 'add-source': openSourceForm(); break;
       case 'add-source-js': openSourceEditor(); break;
+      case 'proxy-save': {
+        const inp = $('#proxyUrlInput');
+        let v = (inp ? inp.value : '').trim().replace(/\/+$/, '');
+        if (v && !/^https?:\/\//i.test(v)) { toast('代理地址要以 http:// 或 https:// 开头'); break; }
+        state.proxyUrl = v;
+        save();
+        toast(v ? '本地代理已设置：' + v : '已关闭本地代理');
+        break;
+      }
       case 'import-source-json': $('#sourceFileInput').click(); break;
       case 'export-sources': exportSources(); break;
       case 'source-edit': openSourceForm(id); break;

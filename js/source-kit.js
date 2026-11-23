@@ -9,11 +9,29 @@
 (function (global) {
   'use strict';
 
-  /* 取网页文本：超时 + 编码探测（复用中文打分思路，gbk 网页很常见）。 */
+  /* 本地代理地址：由用户在墨斋填。设了就让网页请求走它（同源，绕开 CORS）。
+     代理只转发用户自己指定的地址，不内置任何站点。 */
+  let proxy = '';
+  function setProxy(url) { proxy = String(url || '').trim().replace(/\/+$/, ''); }
+  function getProxy() { return proxy; }
+  function useProxy(url) {
+    return !!proxy && /^https?:\/\//i.test(url) && !url.startsWith(proxy);
+  }
+
+  /* 取网页文本：超时 + 编码探测（gbk 网页很常见）。
+     有代理时交给代理取（它已按 charset 解码，直接返回 text）；否则浏览器直取。 */
   async function fetchText(url, headers, timeout) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeout || 12000);
     try {
+      if (useProxy(url)) {
+        const target = proxy + '/proxy?url=' + encodeURIComponent(url);
+        const r = await fetch(target, { signal: ctl.signal });
+        if (!r.ok) throw new Error('代理 HTTP ' + r.status);
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        return data.text || '';
+      }
       const opt = { signal: ctl.signal, credentials: 'omit', redirect: 'follow' };
       if (headers) opt.headers = headers;
       const r = await fetch(url, opt);
@@ -157,7 +175,7 @@
   }
 
   global.MJ = global.MJ || {};
-  global.MJ.sourceKit = { fetchText, decode, parseHtml, pick, pickAll, clean, abs, makeSource };
+  global.MJ.sourceKit = { fetchText, decode, parseHtml, pick, pickAll, clean, abs, makeSource, setProxy, getProxy };
 
   /* 订阅源：和书源共用同一套抓取工具，只是抽「文章列表」而非「书目列表」。
      同样不预置任何地址，规则由用户提供。 */
