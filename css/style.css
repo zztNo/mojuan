@@ -778,6 +778,31 @@ img, svg { display: block; }
   box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
 }
 .unread-badge.reading { background: var(--cinnabar); }
+/* 书架密度：舒适=大封面，紧凑=宽屏更多列 */
+.book-grid.density-compact { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 14px 10px; }
+.book-grid.density-compact .cover-title { font-size: 11px; }
+.book-grid.density-compact .book-name { font-size: 12.5px; }
+.density-toggle button { min-width: 26px; font-size: 11.5px; padding: 4px 6px; }
+/* 书架自动分组行 */
+.shelf-autogroup { align-items: center; gap: 6px; margin-top: -6px; }
+.shelf-autogroup .ag-label { font-size: 11px; color: var(--ink-3); letter-spacing: .1em; margin-right: 2px; }
+/* 书籍备注 */
+.book-note { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.book-note h3 { display: flex; align-items: center; margin: 0 0 6px; }
+.book-note .bn-text { margin: 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+/* 读墨时间轴 */
+.timeline { border-left: 2px solid var(--line); margin-left: 6px; padding-left: 16px; }
+.tl-day { position: relative; margin-bottom: 18px; }
+.tl-day::before {
+  content: ''; position: absolute; left: -23px; top: 4px; width: 9px; height: 9px;
+  border-radius: 50%; background: var(--cinnabar); border: 2px solid var(--paper);
+}
+.tl-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.tl-head b { font: 600 14px var(--font-serif); }
+.tl-head span { font-size: 11.5px; color: var(--ink-3); }
+.tl-items { display: flex; flex-direction: column; gap: 4px; }
+.tl-item { font-size: 12px; color: var(--ink-2); }
+.tl-item i { font-style: normal; font-family: var(--font-ui); color: var(--ink-3); margin-right: 8px; }
 /* 按段落阅读：一次只显示一组，上下按钮翻组 */
 .reader-paper p.para-hidden { display: none; }
 .para-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 24px 0 8px; }

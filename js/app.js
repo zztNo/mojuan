@@ -502,8 +502,10 @@
     history: [],
     seconds: 0,
     readLog: {},
+    /* 阅读事件流：每次翻章记一条 {t, id, ch}，用于时间轴。最多留 500 条。 */
+    readEvents: [],
     dailyGoal: 30,
-    viewMode: 'grid',
+    viewMode: 'grid', density: 'cozy',
     added: {},
     localBooks: [],
     covers: {},
@@ -515,6 +517,8 @@
     listenPos: {},
     pinned: [],
     bookTags: {},
+    /* 整本书的备注（区别于某一段的划线批注） */
+    bookNotes: {},
     /* 订阅源：用户自己填的网页列表规则，只用于公版 / 开放获取 / 自有资源 */
     subscriptions: [],
     subRead: {},
@@ -583,6 +587,7 @@
         bookmarks: Object.assign({}, DEFAULTS.bookmarks, (raw || {}).bookmarks || {}),
         annotations: Object.assign({}, DEFAULTS.annotations, (raw || {}).annotations || {}),
         bookTags: Object.assign({}, DEFAULTS.bookTags, (raw || {}).bookTags || {}),
+        bookNotes: Object.assign({}, DEFAULTS.bookNotes, (raw || {}).bookNotes || {}),
         listenPos: Object.assign({}, DEFAULTS.listenPos, (raw || {}).listenPos || {}),
         pinned: Array.isArray((raw || {}).pinned) ? raw.pinned : [],
         subscriptions: Array.isArray((raw || {}).subscriptions) ? raw.subscriptions : [],
@@ -590,7 +595,8 @@
         lists: Array.isArray((raw || {}).lists) ? raw.lists : [],
         webdav: Object.assign({}, DEFAULTS.webdav, (raw || {}).webdav || {}),
         proxyUrl: String((raw || {}).proxyUrl || ''),
-        readLog: Object.assign({}, DEFAULTS.readLog, (raw || {}).readLog || {})
+        readLog: Object.assign({}, DEFAULTS.readLog, (raw || {}).readLog || {}),
+        readEvents: Array.isArray((raw || {}).readEvents) ? raw.readEvents.slice(-500) : []
       });
     } catch (e) { return structuredClone(DEFAULTS); }
   }
@@ -1667,9 +1673,24 @@ MJ.sources.register({
       </div>`;
     }
     /* 标签筛选带上卷数，一眼看出每个分组有几卷；空分组点不动 */
-    const tagN = (k) => (k === 'all' ? shelf.length : shelf.filter((b) => state.bookTags[b.id] === k).length);
+    /* 自动分组：按真实进度算未读/在读/已读，和手动 tags 并行，不互相覆盖 */
+    const autoGroup = (b) => {
+      const pr = state.progress[b.id];
+      if (!pr) return 'new';
+      const total = Math.max(1, chapterList(b).length);
+      const ch = Math.max(1, Number(pr.ch) || 1);
+      if ((ch - 1 + (Number(pr.pct) || 0)) >= total) return 'read';
+      return 'reading';
+    };
+    const tagN = (k) => {
+      if (k === 'all') return shelf.length;
+      if (k.indexOf('auto:') === 0) return shelf.filter((b) => autoGroup(b) === k.slice(5)).length;
+      return shelf.filter((b) => state.bookTags[b.id] === k).length;
+    };
     html += `<div class="chip-row shelf-filters">${[['all', '全部'], ['want', '想读'], ['reading', '在读'], ['done', '已读']].map(([k, l]) =>
       `<button class="chip ${ui.shelfFilter === k ? 'active' : ''}" data-action="set-shelf-filter" data-val="${k}" ${k !== 'all' && !tagN(k) ? 'disabled' : ''}>${l} ${tagN(k)}</button>`).join('')}</div>`;
+    html += `<div class="chip-row shelf-autogroup"><span class="ag-label">自动</span>${[['new', '未读'], ['reading', '在读'], ['read', '已读']].map(([k, l]) =>
+      `<button class="chip chip-sm ${ui.shelfFilter === 'auto:' + k ? 'active' : ''}" data-action="set-shelf-filter" data-val="auto:${k}" ${!tagN('auto:' + k) ? 'disabled' : ''}>${l} ${tagN('auto:' + k)}</button>`).join('')}</div>`;
     html += `<div class="chip-row shelf-sorts">${[['recent', '最近阅读'], ['name', '书名'], ['added', '添加顺序']].map(([k, l]) =>
       `<button class="chip ${ui.shelfSort === k ? 'active' : ''}" data-action="set-shelf-sort" data-val="${k}">${l}</button>`).join('')}</div>`;
     html += `<div class="shelf-search">${icon('search', 'ic-sm')}<input id="shelfSearch" placeholder="搜书名 / 作者 / 分类" value="${esc(ui.shelfSearch || '')}" autocomplete="off"><button class="shelf-search-clear" data-action="clear-shelf-search" title="清空" ${ui.shelfSearch ? '' : 'hidden'}>${icon('close', 'ic-sm')}</button></div>`;
@@ -1680,6 +1701,10 @@ MJ.sources.register({
           <button class="${state.viewMode === 'grid' ? 'active' : ''}" data-action="toggle-view" data-val="grid" title="网格">${icon('gridview', 'ic-sm')}</button>
           <button class="${state.viewMode === 'list' ? 'active' : ''}" data-action="toggle-view" data-val="list" title="列表">${icon('listview', 'ic-sm')}</button>
         </div>
+        ${state.viewMode === 'grid' ? `<div class="view-toggle density-toggle">
+          <button class="${state.density === 'cozy' ? 'active' : ''}" data-action="set-density" data-val="cozy" title="舒适 · 大封面">舒</button>
+          <button class="${state.density === 'compact' ? 'active' : ''}" data-action="set-density" data-val="compact" title="紧凑 · 宽屏更多列">紧</button>
+        </div>` : ''}
       </div></div>`;
     /* 比较器里原来每次都线性查 getBook / indexOf，几百卷时是 O(n² log n)。
        先把排序用到的字段建成 Map，比较器只读表。 */
@@ -1700,7 +1725,11 @@ MJ.sources.register({
       if (ui.shelfSort === 'added') return x.pos - y.pos;
       return y.updated - x.updated;
     });
-    if (ui.shelfFilter !== 'all') order = order.filter((b) => state.bookTags[b.id] === ui.shelfFilter);
+    if (ui.shelfFilter === 'all') { /* 不过滤 */ }
+    else if (ui.shelfFilter.indexOf('auto:') === 0) {
+      const want = ui.shelfFilter.slice(5);
+      order = order.filter((b) => autoGroup(b) === want);
+    } else order = order.filter((b) => state.bookTags[b.id] === ui.shelfFilter);
     /* 搜索不在这里裁 order：重渲染若按关键词删卡片，之后删字放宽搜索就再也恢复不了。
        统一由 applyShelfSearch 切 hidden，DOM 里始终保留当前分组的全部卡片。 */
     ui.shelfVisibleIds = order.map((b) => b.id);
@@ -1710,7 +1739,7 @@ MJ.sources.register({
         <button class="btn btn-ghost" data-action="set-shelf-filter" data-val="all">看全部</button></div>`;
     } else {
       html += state.viewMode === 'grid'
-        ? `<div class="book-grid">${order.map((b) => bookCard(b, {
+        ? `<div class="book-grid density-${esc(state.density || 'cozy')}">${order.map((b) => bookCard(b, {
             shelf: true, edit: ui.editMode,
             badge: b.status === '连载' && (state.progress[b.id] || {}).updated ? '有更新' : ''
           })).join('')}</div>`
@@ -2094,7 +2123,7 @@ MJ.sources.register({
       state.progress[toId] = Object.assign({}, p, { updated: Date.now() });
       delete state.progress[from];
     }
-    ['bookmarks', 'annotations', 'bookTags', 'listenPos'].forEach((k) => {
+    ['bookmarks', 'annotations', 'bookTags', 'listenPos', 'bookNotes'].forEach((k) => {
       if (state[k] && state[k][from]) {
         state[k][toId] = state[k][toId] || state[k][from];
         delete state[k][from];
@@ -2195,6 +2224,13 @@ MJ.sources.register({
           : `<div class="review"><p>${esc(b.desc)}</p>
               <p class="muted" style="font-size:12px;margin-top:8px">作者${esc(b.author)}，作品已入公有领域，可自由阅读与分发。全文随墨卷离线内置，断网也能读。</p>
               <div class="row-tags" style="margin-top:8px"><span class="tag">公有领域</span><span class="tag">离线可读</span>${(b.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div></div>`}
+        <div class="book-note">
+          <h3 role="heading" aria-level="2">我的备注
+            <button class="link-more" data-action="edit-book-note" data-id="${esc(b.id)}">${state.bookNotes[b.id] ? '编辑' : '写一条'} ${icon('right', 'ic-sm')}</button></h3>
+          ${state.bookNotes[b.id]
+            ? `<p class="bn-text">${esc(state.bookNotes[b.id])}</p>`
+            : '<p class="muted" style="font-size:12px">读这本书的想法、摘记，写在这里，随时可改。</p>'}
+        </div>
       </div>
     </div>`;
     html += `<div class="section">${sectionHead('读过这卷的人也在读', '', '')}
@@ -2268,6 +2304,35 @@ MJ.sources.register({
     if (r) mjExitDo(r, 'mj-fade-out', () => r.remove());
   }
 
+  /* 阅读记录时间轴：按天聚合读墨时长与翻章事件，展示最近有记录的 7 天。
+     数据来自已有的 state.readLog（每日秒数）与 state.readEvents（翻章事件）。 */
+  function readTimelineHtml() {
+    const evs = state.readEvents || [];
+    const log = state.readLog || {};
+    if (!evs.length && !Object.keys(log).length) return '';
+    /* 把事件按「日期」分组 */
+    const byDay = new Map();
+    evs.forEach((e) => {
+      const d = ymd(new Date(e.t));
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(e);
+    });
+    const days = Array.from(byDay.keys()).sort().reverse().slice(0, 7);
+    if (!days.length) return '';
+    const fmt = (ts) => new Date(ts).toTimeString().slice(0, 5);
+    return `<div class="section">${sectionHead('读墨时间轴', '', '')}
+      <div class="timeline">${days.map((d) => {
+        const min = Math.round((log[d] || 0) / 60);
+        const list = (byDay.get(d) || []).slice(-6).reverse();
+        const label = d === today() ? '今天' : (d === ymd(new Date(Date.now() - 86400000)) ? '昨天' : d.slice(5));
+        return `<div class="tl-day"><div class="tl-head"><b>${label}</b><span>${min ? min + ' 分钟' : '—'}</span></div>
+          <div class="tl-items">${list.length ? list.map((e) => {
+            const b = getBook(e.id);
+            return `<div class="tl-item"><i>${fmt(e.t)}</i><span>读到《${esc(b ? b.title : e.id)}》第 ${e.ch} 章</span></div>`;
+          }).join('') : '<div class="tl-item muted">这天没有翻章记录</div>'}</div></div>`;
+      }).join('')}</div></div>`;
+  }
+
   function pageMe() {
     /* 开卷 = 有阅读记录的书（打开过就算）；读过篇目 = 每本读过的章数累加 */
     const opened = Object.keys(state.progress || {}).length;
@@ -2289,6 +2354,7 @@ MJ.sources.register({
       <div class="stat-card"><b>${opened}</b><span>开卷（卷）</span></div>
     </div>`;
     html += readLogHtml();
+    html += readTimelineHtml();
     html += `<div class="section">${sectionHead('每日开卷', '', '')}
       <div class="checkin-card">
         <div class="checkin-days">${[6, 5, 4, 3, 2, 1, 0].map((i) => {
@@ -2417,6 +2483,7 @@ MJ.sources.register({
         })()}
         <div class="setting-row" data-action="export-backup">${icon('clock')}<div class="st">导出完整备份<small>藏卷、进度、笔记、封面、设置、自定义书源与在线音色、本地卷正文，存成一个 JSON 文件</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-backup">${icon('book')}<div class="st">从备份恢复<small>选择之前导出的 .json，会覆盖当前所有数据</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="export-book-notes">${icon('brush')}<div class="st">导出书籍备注<small>把每本书的整书备注整理成一个 TXT</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="webdav-config">${icon('store')}<div class="st">WebDAV 云备份<small>${state.webdav && state.webdav.url ? '已配置 · 可上传 / 恢复' : '填一个支持跨域的 WebDAV 地址，上传或恢复备份'}</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="export-annotations">${icon('brush')}<div class="st">导出划线与批注<small>${noteFilterActive() ? '按「我的笔记」当前的搜索 / 按卷 / 颜色筛选导出' : '把所有卷的笔记整理成一个 TXT'}，方便留存或搬运</small></div>${icon('right', 'ic-sm')}</div>
       </div></div>`;
@@ -5632,7 +5699,12 @@ MJ.sources.register({
     const b = getBook(id);
     ch = Math.max(1, Math.min(chapterList(b).length, ch));
     state.progress[id] = { ch, pct: pct || 0, updated: Date.now() };
-    state.lastRead = id; save();
+    state.lastRead = id;
+    /* 时间轴事件：翻章记一条，限 500 条，避免长年累积把 state 撑大 */
+    state.readEvents = state.readEvents || [];
+    state.readEvents.push({ t: Date.now(), id, ch });
+    if (state.readEvents.length > 500) state.readEvents.splice(0, state.readEvents.length - 500);
+    save();
     /* 新进度已写好，而 showReader 里还会结算一次滚动读数：那份读数属于换章前的
        旧章，同书换章时它的节点/书 id 校验全过得去，会把刚写的新章进度覆盖回旧章。
        这里先作废，让那次结算变成空操作；直接改路由进 showReader 的路径仍会正常结算。 */
@@ -6418,7 +6490,40 @@ MJ.sources.register({
         else toast('还没有导入本地卷');
         break;
       }
+      case 'edit-book-note': {
+        const b = getBook(id);
+        if (!b) break;
+        let root = $('#sourceModal');
+        if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
+        root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
+          <div class="cover-editor mini-modal"><div class="ce-head"><h3>备注《${esc(b.title)}》</h3>
+            <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
+          <div class="mm-body"><label>我的备注<textarea id="bookNoteInput" rows="8" placeholder="这本书的想法、摘记、读后感受…">${esc(state.bookNotes[b.id] || '')}</textarea></label></div>
+          <div class="ce-foot"><div></div><button class="btn btn-ghost" data-action="source-close">取消</button>
+            <button class="btn btn-primary" data-action="save-book-note" data-id="${esc(b.id)}">保存</button></div></div>`;
+        a11ySweep(root);
+        break;
+      }
+      case 'save-book-note': {
+        const txt = (($('#bookNoteInput') || {}).value || '').trim();
+        if (txt) state.bookNotes[id] = txt; else delete state.bookNotes[id];
+        save(); closeSourceEditor(); rerender(); toast('备注已保存');
+        break;
+      }
+      case 'export-book-notes': {
+        const entries = Object.keys(state.bookNotes || {}).filter((k) => state.bookNotes[k]);
+        if (!entries.length) { toast('还没有书籍备注'); break; }
+        const txt = entries.map((k) => {
+          const b = getBook(k) || {};
+          return '《' + (b.title || k) + '》' + (b.author ? ' · ' + b.author : '') + '\n'
+            + state.bookNotes[k] + '\n';
+        }).join('\n' + '—'.repeat(20) + '\n');
+        const okEx = downloadText('墨卷书籍备注-' + today() + '.txt', txt);
+        toast(okEx ? '备注已导出 ' + entries.length + ' 条' : '导出失败，请检查下载权限');
+        break;
+      }
       case 'toggle-view': state.viewMode = val; save(); rerender(); break;
+      case 'set-density': state.density = val; save(); rerender(); break;
       case 'set-cat': ui.cat = val; rerender(); break;
       case 'set-status': ui.status = val; rerender(); break;
       case 'set-sortby': ui.sortBy = val; rerender(); break;

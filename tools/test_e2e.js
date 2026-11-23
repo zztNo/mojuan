@@ -2564,6 +2564,71 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AY：MD3 分支借鉴的四项功能 ===== */
+  {
+    const p = await newPage(browser, {
+      shelf: ['shijing'], progress: { shijing: { ch: 1, pct: 0 } }
+    }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(400);
+    /* Y1 密度切换 */
+    const hasDensity = await p.evaluate(() => !!document.querySelector('[data-action="set-density"]'));
+    await p.click('[data-action="set-density"][data-val="compact"]');
+    await p.waitForTimeout(250);
+    const density = await p.evaluate(() => ({
+      cls: document.querySelector('.book-grid').className,
+      saved: JSON.parse(localStorage.getItem('mojuan.state.v1')).density
+    }));
+    ok('AY1 书架密度可切换并持久化', hasDensity && density.cls.indexOf('density-compact') >= 0 && density.saved === 'compact',
+      JSON.stringify(density));
+    /* Y2 自动分组：有进度 -> 在读，无进度 -> 未读；用第二本书造对照 */
+    const chips = await p.evaluate(() => Array.from(document.querySelectorAll('.shelf-autogroup .chip')).map((e) => e.textContent.trim()));
+    await p.click('[data-action="set-shelf-filter"][data-val="auto:reading"]');
+    await p.waitForTimeout(250);
+    const readingCards = await p.evaluate(() => document.querySelectorAll('.book-card').length);
+    ok('AY2 自动分组按进度归类', chips.length === 3 && chips[1].indexOf('1') >= 0 && readingCards === 1,
+      JSON.stringify({ chips, readingCards }));
+    await p.close();
+  }
+  {
+    /* Y3 书籍备注：编辑、落盘、展示 */
+    const p = await newPage(browser, { shelf: ['shijing'] }, errs);
+    await p.goto(FILE + '#/book/shijing');
+    await p.waitForTimeout(400);
+    await p.click('[data-action="edit-book-note"]');
+    await p.waitForTimeout(150);
+    await p.fill('#bookNoteInput', '这是一本好诗集');
+    await p.click('[data-action="save-book-note"]');
+    await p.waitForTimeout(300);
+    const note = await p.evaluate(() => ({
+      saved: JSON.parse(localStorage.getItem('mojuan.state.v1')).bookNotes.shijing,
+      shown: (document.querySelector('.bn-text') || {}).textContent
+    }));
+    ok('AY3 书籍备注可编辑与展示', note.saved === '这是一本好诗集' && note.shown === note.saved,
+      JSON.stringify(note));
+    await p.close();
+  }
+  {
+    /* Y4 时间轴：翻章事件按天展示 */
+    const p = await newPage(browser, {
+      shelf: ['shijing'],
+      readEvents: [
+        { t: Date.now(), id: 'shijing', ch: 2 },
+        { t: Date.now() - 3600000, id: 'shijing', ch: 1 }
+      ]
+    }, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    const tl = await p.evaluate(() => ({
+      has: !!document.querySelector('.timeline'),
+      n: document.querySelectorAll('.tl-item').length,
+      txt: (document.querySelector('.timeline') || {}).textContent || ''
+    }));
+    ok('AY4 读墨时间轴展示翻章事件', tl.has && tl.n === 2 && tl.txt.indexOf('诗经') >= 0,
+      JSON.stringify({ has: tl.has, n: tl.n }));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
