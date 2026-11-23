@@ -73,9 +73,13 @@
        chapterList(b)[ch-1].title 抛错。给个「全文」兜底，至少能打开。 */
     if (b.local) {
       const cs = b.chapters || [];
-      return cs.length ? cs.map((t, i) => ({ no: i + 1, title: t })) : [{ no: 1, title: '全文' }];
+      return cs.length ? cs.map((t, i) => ({ no: i + 1, title: applyClean(t, 'title', b) }))
+        : [{ no: 1, title: '全文' }];
     }
-    if (b.chapters && b.chapters.length) return b.chapters;
+    if (b.chapters && b.chapters.length) {
+      /* 阅读规则可只作用标题：目录、翻页、听书都走这里，统一净化 */
+      return b.chapters.map((c) => Object.assign({}, c, { title: applyClean(c.title, 'title', b) }));
+    }
     return [{ no: 1, title: '全文' }];
   }
   /* 全书读了多少：progress.pct 只记「本章读到几成」，直接当全书进度显示会大错
@@ -97,23 +101,102 @@
     if (!src || typeof src.getChapterNotes !== 'function') return [];
     try { return src.getChapterNotes(b.id, idx + 1) || []; } catch (e) { return []; }
   }
-  /* A5 内容净化：用户自己配的正则替换，作用于正文段落。
-     跳过占位提示与「本章完」，免得把错误提示当成正文洗掉、或抹掉章末标记。 */
-  function cleanParagraphs(paras) {
-    const rules = (state.settings.cleanRules || []).filter((r) => r && r.pattern);
+  /* 导入阅读 App 导出的净化规则 JSON。认 ReplaceRule 字段，也认墨卷自己的
+     {pattern,replacement} 数组；旧文本格式每行一条。返回 null 表示无法识别。 */
+  function parseReplaceRules(text) {
+    let data;
+    try { data = JSON.parse(String(text).replace(/^\uFEFF/, '')); }
+    catch (e) {
+      // 不是 JSON，按文本格式解析：正则 => 替换 / 文本 :: 替换，# 后是标记
+      const lines = String(text).split('\n').map((x) => x.trim()).filter(Boolean);
+      if (!lines.length) return null;
+      const out = [];
+      lines.forEach((line) => {
+        const hash = line.indexOf('#');
+        const body = (hash >= 0 ? line.slice(0, hash) : line).trim();
+        const meta = hash >= 0 ? line.slice(hash + 1) : '';
+        const plain = body.indexOf('::') >= 0;
+        const parts = plain ? body.split(/\s*::\s*/) : body.split(/\s*(?:=>|==>)\s*/);
+        const pattern = (parts[0] || '').trim();
+        if (!pattern) return;
+        if (!plain) { try { new RegExp(pattern); } catch (e2) { return; } }
+        const r = {
+          name: '', group: '', pattern, replacement: parts.slice(1).join(plain ? '::' : '=>'),
+          isRegex: !plain, isEnabled: meta.indexOf('停用') < 0,
+          scopeContent: true, scopeTitle: meta.indexOf('标题') >= 0,
+          scope: '', excludeScope: '', flags: 'g'
+        };
+        const g = meta.match(/组:(\S+)/), sc = meta.match(/源:(\S+)/), ex = meta.match(/排除:(\S+)/);
+        if (g) r.group = g[1];
+        if (sc) r.scope = sc[1];
+        if (ex) r.excludeScope = ex[1];
+        out.push(r);
+      });
+      return out.length ? out : null;
+    }
+    const arr = Array.isArray(data) ? data
+      : (data && Array.isArray(data.replaceRules) ? data.replaceRules
+        : (data && Array.isArray(data.rules) ? data.rules : []));
+    if (!arr.length) return null;
+    return arr.filter((r) => r && typeof r === 'object' && r.pattern).map((r) => ({
+      name: String(r.name || ''), group: String(r.group || ''),
+      pattern: String(r.pattern), replacement: String(r.replacement || ''),
+      isRegex: r.isRegex !== false, isEnabled: r.isEnabled !== false,
+      scope: String(r.scope || ''), excludeScope: String(r.excludeScope || ''),
+      scopeTitle: r.scopeTitle === true, scopeContent: r.scopeContent !== false,
+      flags: r.flags || 'g', order: Number(r.order) || 0
+    }));
+  }
+
+  /* 内容净化：兼容阅读 App 的替换规则（ReplaceRule）核心字段。
+     pattern/replacement + isRegex（false 为纯文本）+ scope（限定书源）+
+     scopeTitle/scopeContent（作用标题/正文）+ isEnabled + group。
+     旧的纯文本格式「正则 => 替换」在导入时转成对象，这里只认对象。 */
+  function ruleMatchesScope(r, b) {
+    const source = b ? String(b.sourceId || b.id || '') : '';
+    const srcName = b && b.sourceId ? String((SRC.get(b.sourceId) || {}).name || '') : '';
+    const inList = (field) => {
+      const raw = r[field];
+      if (!raw) return false;
+      const names = String(raw).split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+      return names.some((n) => source === n || srcName === n);
+    };
+    if (r.scope && !inList('scope')) return false;
+    if (r.excludeScope && inList('excludeScope')) return false;
+    return true;
+  }
+  function applyClean(text, kind, b) {
+    if (!text) return text;
+    const rules = state.settings.cleanRules || [];
+    let s = String(text);
+    rules.forEach((r) => {
+      if (!r || !r.pattern || r.isEnabled === false || !ruleMatchesScope(r, b)) return;
+      if (kind === 'title' && r.scopeTitle === false) return;
+      if (kind === 'content' && r.scopeContent === false) return;
+      const rep = r.replacement || '';
+      try {
+        if (r.isRegex === false) {
+          // 纯文本：split/join 不会把 . * ( ) 当正则元字符
+          s = s.split(r.pattern).join(rep);
+        } else {
+          s = s.replace(new RegExp(r.pattern, r.flags || 'g'), rep);
+        }
+      } catch (e) { /* 写错的规则跳过，不影响阅读 */ }
+    });
+    return s;
+  }
+  /* 正文段落：跳过占位提示与「本章完」，免得把错误提示洗掉或抹掉章末标记 */
+  function cleanParagraphs(paras, b) {
+    const rules = (state.settings.cleanRules || []);
     if (!rules.length) return paras;
     return paras.map((t) => {
       if (!t || /^（(这一章暂未取到|本章内容未能读取)/.test(t) || t.indexOf('（本章完') === 0) return t;
-      let s = t;
-      rules.forEach((r) => {
-        try { s = s.replace(new RegExp(r.pattern, r.flags || 'g'), r.replacement || ''); }
-        catch (e) { /* 写错的规则跳过，不影响阅读 */ }
-      });
+      const s = applyClean(t, 'content', b);
       return s.trim() || t;
     });
   }
   function paragraphs(b, idx) {
-    const cleaned = (arr) => cleanParagraphs(arr);
+    const cleaned = (arr) => cleanParagraphs(arr, b);
     if (b.local) {
       const rec = contentCache[b.id];
       const c = rec && rec.chapters && rec.chapters[idx];
@@ -6388,26 +6471,47 @@ MJ.sources.register({
       case 'clean-rules': {
         let root = $('#sourceModal');
         if (!root) { root = document.createElement('div'); root.id = 'sourceModal'; document.body.appendChild(root); }
-        const rules = (state.settings.cleanRules || []).map((r) => r.pattern + (r.replacement ? ' => ' + r.replacement : '')).join('\n');
+        const rules = (state.settings.cleanRules || []);
+        const lines = rules.map((r) => {
+          const sep = r.isRegex === false ? ' :: ' : ' => ';
+          let line = r.pattern + (r.replacement ? sep + r.replacement : '');
+          const meta = [];
+          if (r.group) meta.push('组:' + r.group);
+          if (r.scope) meta.push('源:' + r.scope);
+          if (r.scopeTitle) meta.push('标题');
+          if (r.isEnabled === false) meta.push('停用');
+          if (meta.length) line += '    # ' + meta.join(' ');
+          return line;
+        }).join('\n');
         root.innerHTML = `<div class="modal-backdrop" data-action="source-close"></div>
           <div class="cover-editor mini-modal"><div class="ce-head"><h3>正文替换规则</h3>
             <button class="icon-btn" data-action="source-close" title="关闭">${icon('close')}</button></div>
-          <div class="mm-body"><p class="mm-hint">每行一条：正则表达式 =&gt; 替换文本。省略 =&gt; 就是删除匹配内容。例如 <code>广告.*</code> 删掉含"广告"的行。</p>
-            <textarea id="cleanRulesInput" rows="10" spellcheck="false" placeholder="广告.*\n第\\d+章 请收藏 =>">${esc(rules)}</textarea></div>
-          <div class="ce-foot"><div></div><button class="btn btn-ghost" data-action="source-close">取消</button>
+          <div class="mm-body">
+            <p class="mm-hint">兼容阅读 App 的净化规则。每行一条：<code>正则 =&gt; 替换</code>（删除就省略右侧）；<code>文本 :: 替换</code> 是纯文本替换。<code>#</code> 后写 组/源/标题/停用 等标记。可导入阅读导出的 JSON。</p>
+            <textarea id="cleanRulesInput" rows="11" spellcheck="false" placeholder="广告.*\n第\\d+章 请收藏 =>\n本书广告 ::    # 源:my-source">${esc(lines)}</textarea>
+            <p class="mm-hint">规则按顺序执行。作用范围填书源标识或书源名，多个用逗号分隔；不填则对所有书生效。</p>
+          </div>
+          <div class="ce-foot"><div class="rule-actions">
+            <button class="btn btn-ghost btn-sm" data-action="clean-rules-import">导入 JSON</button>
+            <button class="btn btn-ghost btn-sm" data-action="clean-rules-export">导出</button>
+          </div>
+            <button class="btn btn-ghost" data-action="source-close">取消</button>
             <button class="btn btn-primary" data-action="clean-rules-save">保存</button></div></div>`;
         a11ySweep(root);
         break;
       }
+      case 'clean-rules-import': $('#ruleFileInput').click(); break;
+      case 'clean-rules-export': {
+        const rules = state.settings.cleanRules || [];
+        if (!rules.length) { toast('还没有规则可导出'); break; }
+        const okExp = downloadText('墨卷净化规则-' + today() + '.json',
+          JSON.stringify({ app: 'mojuan-rules', version: 1, rules }, null, 2));
+        toast(okExp ? '净化规则已导出：' + rules.length + ' 条' : '导出失败，请检查下载权限');
+        break;
+      }
       case 'clean-rules-save': {
         const txt = ($('#cleanRulesInput') || {}).value || '';
-        const rules = [];
-        txt.split('\n').forEach((line) => {
-          const s = line.trim(); if (!s) return;
-          const parts = s.split(/\s*=>\s*/);
-          try { new RegExp(parts[0]); rules.push({ pattern: parts[0], replacement: parts.slice(1).join('=>'), flags: 'g' }); }
-          catch (e) { /* 写错的行跳过 */ }
-        });
+        const rules = parseReplaceRules(txt) || [];
         state.settings.cleanRules = rules; save(); closeSourceEditor();
         if ($('#reader')) showReader(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh));
         toast('净化规则已保存：' + rules.length + ' 条');
@@ -7121,6 +7225,35 @@ MJ.sources.register({
   $('#sourceFileInput').addEventListener('change', (e) => {
     const f = e.target.files && e.target.files[0];
     if (f) importSourceJson(f);
+    e.target.value = '';
+  });
+  $('#ruleFileInput').addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try {
+      const parsed = parseReplaceRules(await f.text());
+      if (!parsed) { toast('没识别到净化规则'); }
+      else {
+        // 导入追加到现有规则后面，不覆盖用户已配的
+        state.settings.cleanRules = (state.settings.cleanRules || []).concat(parsed);
+        save();
+        toast('已导入净化规则 ' + parsed.length + ' 条，点保存生效');
+        // 回填文本框让用户确认
+        const ta = $('#cleanRulesInput');
+        if (ta) {
+          ta.value = state.settings.cleanRules.map((r) => {
+            const sep = r.isRegex === false ? ' :: ' : ' => ';
+            let line = r.pattern + (r.replacement ? sep + r.replacement : '');
+            const meta = [];
+            if (r.group) meta.push('组:' + r.group);
+            if (r.scope) meta.push('源:' + r.scope);
+            if (r.scopeTitle) meta.push('标题');
+            if (r.isEnabled === false) meta.push('停用');
+            return line + (meta.length ? '    # ' + meta.join(' ') : '');
+          }).join('\n');
+        }
+      }
+    } catch (err) { toast('导入失败：' + (err.message || '文件读取错误')); }
     e.target.value = '';
   });
   /* 封面图片选择器常驻，避免每次打开编辑器重复创建 */

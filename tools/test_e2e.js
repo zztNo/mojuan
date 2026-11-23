@@ -2411,6 +2411,90 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== AW：阅读 App 净化规则兼容 ===== */
+  {
+    /* 用 shijing 真实正文「关关雎鸠，在河之洲」验证正则与纯文本两种替换 */
+    const rules = [
+      { name: '正则', pattern: '关关雎鸠', replacement: '【正则命中】', isRegex: true, isEnabled: true, scopeContent: true, flags: 'g' },
+      { name: '纯文本', pattern: '在河之洲', replacement: '【文本命中】', isRegex: false, isEnabled: true, scopeContent: true, flags: 'g' },
+      { name: '停用', pattern: '窈窕淑女', replacement: '【不该出现】', isRegex: false, isEnabled: false, scopeContent: true, flags: 'g' }
+    ];
+    const p = await newPage(browser, {
+      shelf: ['shijing'],
+      settings: { pageMode: 'scroll', cleanRules: rules },
+      progress: { shijing: { ch: 1, pct: 0 } }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(650);
+    const body = await p.evaluate(() => document.querySelector('#readerBody').textContent);
+    ok('AW1 正则与纯文本替换生效，停用规则不生效',
+      body.indexOf('【正则命中】') >= 0 && body.indexOf('【文本命中】') >= 0
+      && body.indexOf('【不该出现】') < 0 && body.indexOf('窈窕淑女') >= 0,
+      body.slice(0, 80));
+    /* 导入阅读导出的 ReplaceRule JSON */
+    await p.evaluate(() => { location.hash = '#/me'; });
+    await p.waitForTimeout(250);
+    /* 必须先在阅读设置里打开净化弹层，#cleanRulesInput 才存在 */
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(600);
+    await p.click('[data-action="reader-settings"]');
+    await p.waitForTimeout(700);
+    await p.click('[data-action="clean-rules"]');
+    await p.waitForTimeout(150);
+    const legado = JSON.stringify([
+      { id: 1, name: '阅读规则', group: '净化', pattern: 'abc', replacement: 'XYZ',
+        isRegex: false, isEnabled: true, scopeContent: true, scopeTitle: false, order: 0 }
+    ]);
+    await p.locator('#ruleFileInput').setInputFiles({ name: 'rules.json', mimeType: 'application/json', buffer: Buffer.from(legado) });
+    await p.waitForTimeout(300);
+    const imported = await p.evaluate(() => ({
+      n: JSON.parse(localStorage.getItem('mojuan.state.v1')).settings.cleanRules.length,
+      inBox: (document.querySelector('#cleanRulesInput') || {}).value || ''
+    }));
+    ok('AW2 阅读净化规则 JSON 可导入', imported.n === 4 && imported.inBox.indexOf('abc') >= 0,
+      JSON.stringify(imported).slice(0, 150));
+    await p.close();
+  }
+  {
+    /* 标题净化 + 作用范围：用在线书验证 scope 只对指定书源生效 */
+    const p = await newPage(browser, {
+      settings: { cleanRules: [
+        { name: '标题', pattern: '第', replacement: 'CH', isRegex: false, isEnabled: true,
+          scopeTitle: true, scopeContent: false, flags: 'g' },
+        { name: '甲源专属', pattern: '限定', replacement: '命中', isRegex: false, isEnabled: true,
+          scope: 'srcA', scopeContent: true, flags: 'g' }
+      ] }
+    }, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    await p.evaluate(async () => {
+      ['srcA', 'srcB'].forEach((sid) => window.MJ.sources.register({
+        id: sid, name: sid === 'srcA' ? '甲源' : '乙源', online: true,
+        metasSync: () => [{ id: sid + ':1', sourceId: sid, title: '第1章', category: 'x',
+          tags: [], chapters: [{ no: 1, title: '第1章 限定内容' }] }],
+        getChapter: async () => ['第1章 限定内容', '正文限定']
+      }));
+      await window.MJ.sources.refresh();
+    });
+    /* 进阅读器看渲染结果：章节标题与正文的净化都在渲染层发生 */
+    await p.goto(FILE + '#/reader/srcA:1/1');
+    await p.waitForTimeout(800);
+    const a = await p.evaluate(() => ({
+      title: document.querySelector('#readerPaper h1')?.textContent || '',
+      body: document.querySelector('#readerBody')?.textContent || ''
+    }));
+    await p.goto(FILE + '#/reader/srcB:1/1');
+    await p.waitForTimeout(800);
+    const bb = await p.evaluate(() => ({
+      title: document.querySelector('#readerPaper h1')?.textContent || '',
+      body: document.querySelector('#readerBody')?.textContent || ''
+    }));
+    ok('AW3 标题净化与书源作用范围生效',
+      a.title.indexOf('CH') >= 0 && a.body.indexOf('命中') >= 0
+      && bb.title.indexOf('CH') >= 0 && bb.body.indexOf('命中') < 0,
+      JSON.stringify({ a, bb }).slice(0, 200));
+    await p.close();
+  }
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

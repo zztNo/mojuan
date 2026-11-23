@@ -768,6 +768,8 @@ img, svg { display: block; }
   background: var(--paper); color: var(--ink); font-family: var(--font-ui); font-size: 13px; outline: none;
 }
 .proxy-input-row input:focus { border-color: var(--cinnabar); }
+/* 净化规则弹层底部的导入/导出按钮 */
+.rule-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 /* 按段落阅读：一次只显示一组，上下按钮翻组 */
 .reader-paper p.para-hidden { display: none; }
 .para-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 24px 0 8px; }
