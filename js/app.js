@@ -73,12 +73,12 @@
        chapterList(b)[ch-1].title 抛错。给个「全文」兜底，至少能打开。 */
     if (b.local) {
       const cs = b.chapters || [];
-      return cs.length ? cs.map((t, i) => ({ no: i + 1, title: applyClean(t, 'title', b) }))
+      return cs.length ? cs.map((t, i) => ({ no: i + 1, title: applyS2T(applyClean(t, 'title', b)) }))
         : [{ no: 1, title: '全文' }];
     }
     if (b.chapters && b.chapters.length) {
       /* 阅读规则可只作用标题：目录、翻页、听书都走这里，统一净化 */
-      return b.chapters.map((c) => Object.assign({}, c, { title: applyClean(c.title, 'title', b) }));
+      return b.chapters.map((c) => Object.assign({}, c, { title: applyS2T(applyClean(c.title, 'title', b)) }));
     }
     return [{ no: 1, title: '全文' }];
   }
@@ -185,13 +185,19 @@
     });
     return s;
   }
+  /* 简繁转换：在净化之后做，正文与章节标题都走这里 */
+  function applyS2T(text) {
+    return state.settings.s2t && globalThis.MJ_S2T && typeof MJ_S2T.convert === 'function'
+      ? MJ_S2T.convert(text) : text;
+  }
   /* 正文段落：跳过占位提示与「本章完」，免得把错误提示洗掉或抹掉章末标记 */
   function cleanParagraphs(paras, b) {
     const rules = (state.settings.cleanRules || []);
-    if (!rules.length) return paras;
+    const s2t = state.settings.s2t && globalThis.MJ_S2T;
+    if (!rules.length && !s2t) return paras;
     return paras.map((t) => {
       if (!t || /^（(这一章暂未取到|本章内容未能读取)/.test(t) || t.indexOf('（本章完') === 0) return t;
-      const s = applyClean(t, 'content', b);
+      const s = applyS2T(applyClean(t, 'content', b));
       return s.trim() || t;
     });
   }
@@ -489,7 +495,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -687,6 +693,7 @@
     shelfFilter: 'all', shelfSort: 'recent', shelfVisibleIds: [], shelfSearch: '',
     noteSearch: '', noteBook: '', noteColor: '', hlColor: 'red', seekDragAt: 0, metaDraft: null,
     noteMulti: false, notePicked: new Set(), noteLimit: 200, paraGroup: 0,
+    autoPage: false, autoPageMs: 6000,
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
     bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
     tocLoading: false, tocFailed: false, tocOffline: false, storageFull: false
@@ -1548,6 +1555,11 @@ MJ.sources.register({
     const badge = opts.badge ? `<div class="cover-badge ${opts.ghost ? 'ghost' : ''}">${opts.badge}</div>` : '';
     const bp = bookPct(b);
     const prog = bp > 0 ? `<div class="book-progress">已读 ${Math.max(1, Math.round(bp * 100))}% · 第${pr.ch}章</div>` : '';
+    /* 藏卷卡角标：未读章节数，红=在读、灰=未开始（对应阅读的红/灰小数字） */
+    const total = Math.max(1, chapterList(b).length);
+    const unread = Math.max(0, total - (pr ? Math.max(1, Number(pr.ch) || 1) : 1));
+    const unreadBadge = opts.shelf && unread > 0
+      ? `<span class="unread-badge ${pr ? 'reading' : ''}" title="未读 ${unread} 章">${unread > 99 ? '99+' : unread}</span>` : '';
     const picked = ui.selected.has(b.id);
     const pick = opts.edit
       ? `<div class="pick-box ${picked ? 'on' : ''}" data-action="pick-book" data-id="${b.id}">${picked ? icon('check', 'ic-sm') : ''}</div>`
@@ -1560,7 +1572,7 @@ MJ.sources.register({
       : '';
     const tap = opts.edit ? 'pick-book' : (opts.shelf ? 'shelf-read' : 'open-book');
     return `<div class="book-card ${opts.edit ? 'editable' : ''} ${picked ? 'picked' : ''}" data-action="${tap}" data-id="${b.id}" ${opts.shelf ? 'data-shelf-card="1"' : ''} data-st="${esc(b.title.toLowerCase())}" data-sa="${esc((b.author || '').toLowerCase())}" data-sc="${esc((b.category || '').toLowerCase())}">
-      <div class="cover-wrap">${coverHtml(b)}${badge}${pick}${quick}</div>
+      <div class="cover-wrap">${coverHtml(b)}${badge}${unreadBadge}${pick}${quick}</div>
       <div class="book-name">${esc(b.title)}</div>
       <div class="book-meta"><span class="bm-text">${esc(b.author)} · ${esc(b.category)}</span>${miniTags(b)}</div>
       ${prog}
@@ -2519,6 +2531,7 @@ MJ.sources.register({
         <button class="rb-mbtn" data-action="toggle-tts" id="ttsBtn" title="打开听卷界面">${icon('volume')}<span>听卷</span></button>
         <button class="rb-mbtn" data-action="reader-theme-toggle" id="themeBtn" data-on="${night}" title="切换夜墨 / 日光">${icon(night ? 'sun' : 'moon')}<span>${night ? '日间' : '夜间'}</span></button>
         <button class="rb-mbtn" data-action="reader-settings" title="字号与纸张">${icon('settings')}<span>设置</span></button>
+        <button class="rb-mbtn" data-action="auto-page" id="autoPageBtn" title="自动翻页">${icon('play')}<span>自动翻页</span></button>
         <button class="rb-mbtn" data-action="reader-search" title="在本书中搜索">${icon('search')}<span>搜索</span></button>
       </div>`;
     /* tabindex="-1"：抽屉关掉后焦点要能回到阅读器本身，否则会掉到 body（读屏会从头念） */
@@ -2863,6 +2876,48 @@ MJ.sources.register({
   /* 版面此刻到底是不是翻页：在线章取不到正文时会临时降级成滚动版，
      可设置里仍然是「左右翻页」。点击左右、空格、方向键、进度条都要按真实版面走，
      否则会推着上一本书留下的 flipState 空转，翻到页尾还会把阅读器切到另一卷去。 */
+  /* 自动翻页：一个定时器统一驱动三种读墨模式，前进一步复用各自已有的逻辑。
+     到最后一章末停住，不无限空转。 */
+  let autoPageTimer = null;
+  function autoPageStop() {
+    if (autoPageTimer) { clearInterval(autoPageTimer); autoPageTimer = null; }
+    ui.autoPage = false;
+    syncReaderMenu();
+  }
+  function autoPageStep() {
+    if (!$('#reader')) { autoPageStop(); return; }
+    const mode = readerRoot.dataset.mode;
+    if (mode === 'para') { flipParaGroup(1); return; }
+    if (mode === 'flip') {
+      if (flipState.pages.length && flipState.page < flipState.pages.length - 1) {
+        commitPage(flipState.page + 1);
+      } else {
+        const id = readerRoot.dataset.currentBook, ch = Number(readerRoot.dataset.currentCh) || 1;
+        const b = getBook(id);
+        if (b && ch < chapterList(b).length) switchChapter(id, ch + 1);
+        else autoPageStop();
+      }
+      return;
+    }
+    /* 滚动：滚一屏；到底则下一章，末章停 */
+    const body = $('#readerBody');
+    if (!body) return;
+    const max = Math.max(0, body.scrollHeight - body.clientHeight);
+    if (body.scrollTop + 2 < max) { scrollReaderBody(body, body.clientHeight * 0.86, false); return; }
+    const id = readerRoot.dataset.currentBook, ch = Number(readerRoot.dataset.currentCh) || 1;
+    const b = getBook(id);
+    if (b && ch < chapterList(b).length) switchChapter(id, ch + 1);
+    else autoPageStop();
+  }
+  function autoPageToggle() {
+    if (ui.autoPage) { autoPageStop(); return; }
+    ui.autoPage = true;
+    if (autoPageTimer) clearInterval(autoPageTimer);
+    autoPageTimer = setInterval(autoPageStep, Math.max(1000, ui.autoPageMs || 6000));
+    syncReaderMenu();
+    toast('自动翻页已开启 · 每 ' + Math.round((ui.autoPageMs || 6000) / 1000) + ' 秒一页，再点按钮停止');
+  }
+
   function readerFlipMode() {
     return !!$('#reader') && readerRoot.dataset.mode === 'flip';
   }
@@ -3177,6 +3232,13 @@ MJ.sources.register({
     if (tb && tb.dataset.on !== String(night)) {
       tb.dataset.on = String(night);
       tb.innerHTML = icon(night ? 'sun' : 'moon') + `<span>${night ? '日间' : '夜间'}</span>`;
+    }
+    const ap = $('#autoPageBtn');
+    if (ap && ap.dataset.on !== String(!!ui.autoPage)) {
+      ap.dataset.on = String(!!ui.autoPage);
+      ap.classList.toggle('is-on', !!ui.autoPage);
+      ap.innerHTML = icon(ui.autoPage ? 'pause' : 'play')
+        + `<span>${ui.autoPage ? '停止翻页' : '自动翻页'}</span>`;
     }
   }
   function updateReaderSeek() {
@@ -5369,6 +5431,7 @@ MJ.sources.register({
   }
   function hideReader() {
     readerToken += 1;
+    if (autoPageTimer) { clearInterval(autoPageTimer); autoPageTimer = null; ui.autoPage = false; }
     /* 退出阅读器时朗读不中断，收成迷你播放条继续播；只有用户显式点「停止」才停 */
     if (listen.active) { listen.expanded = false; renderListen(); }
     settleSession();
@@ -5423,6 +5486,14 @@ MJ.sources.register({
         </div></div>
         <div class="rs-row"><label>净化</label><div class="rs-pills">
           <button class="rs-pill" data-action="clean-rules">正文替换规则 ${(state.settings.cleanRules || []).length ? '· ' + state.settings.cleanRules.length + ' 条' : ''}</button>
+        </div></div>
+        <div class="rs-row"><label>字形</label><div class="rs-pills">
+          <button class="rs-pill ${!state.settings.s2t ? 'active' : ''}" data-action="set-s2t" data-val="0">简体</button>
+          <button class="rs-pill ${state.settings.s2t ? 'active' : ''}" data-action="set-s2t" data-val="1">繁体</button>
+        </div></div>
+        <div class="rs-row"><label>自动翻页</label><div class="rs-pills">
+          ${[[3000, '快'], [6000, '中'], [10000, '慢']].map(([ms, l]) =>
+            `<button class="rs-pill ${ui.autoPageMs === ms ? 'active' : ''}" data-action="auto-speed" data-val="${ms}">${l}</button>`).join('')}
         </div></div>
         <div class="rs-row rate-inline"><label>朗读</label>${rateSliderHtml(state.settings.rate, '语速 · 按住圆点拖动')}</div>
         <div class="rs-row"><label>存档</label><div class="rs-pills">
@@ -6588,6 +6659,19 @@ MJ.sources.register({
       }
       case 'search-all-cancel': cancelSearchAll(); break;
       case 'reader-prev': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1); break;
+      case 'set-s2t': {
+        state.settings.s2t = val === '1'; save();
+        $$('#readerPanel .rs-pill').forEach((x) => { if (x.dataset.action === 'set-s2t') x.classList.toggle('active', (x.dataset.val === '1') === state.settings.s2t); });
+        if ($('#reader')) showReader(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh));
+        break;
+      }
+      case 'auto-page': autoPageToggle(); break;
+      case 'auto-speed': {
+        ui.autoPageMs = Math.max(1000, Number(val) || 6000);
+        if (ui.autoPage) { clearInterval(autoPageTimer); autoPageTimer = setInterval(autoPageStep, ui.autoPageMs); }
+        $$('#readerPanel .rs-pill').forEach((x) => { if (x.dataset.action === 'auto-speed') x.classList.toggle('active', Number(x.dataset.val) === ui.autoPageMs); });
+        break;
+      }
       case 'reader-next': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1); break;
       case 'reader-retry': {
         /* 断网时点「重新取回」：把这一章的失败结果从缓存里清掉再拉一次 */

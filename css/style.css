@@ -770,6 +770,14 @@ img, svg { display: block; }
 .proxy-input-row input:focus { border-color: var(--cinnabar); }
 /* 净化规则弹层底部的导入/导出按钮 */
 .rule-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 书架未读章节角标：红=在读，灰=未开始 */
+.unread-badge {
+  position: absolute; top: 6px; right: 6px; z-index: 3; min-width: 20px; height: 20px;
+  padding: 0 5px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  background: rgba(60, 60, 60, .78); color: #fff; font: 700 11px var(--font-ui);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}
+.unread-badge.reading { background: var(--cinnabar); }
 /* 按段落阅读：一次只显示一组，上下按钮翻组 */
 .reader-paper p.para-hidden { display: none; }
 .para-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 24px 0 8px; }

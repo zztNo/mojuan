@@ -2495,6 +2495,75 @@ const TTS_MOCK = () => {
       JSON.stringify({ a, bb }).slice(0, 200));
     await p.close();
   }
+  /* ===== AX：从阅读 App 借鉴的四项功能 ===== */
+  {
+    /* X1 未读章节角标 */
+    const p = await newPage(browser, {
+      shelf: ['shijing'], progress: { shijing: { ch: 3, pct: 0 } }
+    }, errs);
+    await p.goto(FILE + '#/shelf');
+    await p.waitForTimeout(400);
+    const b = await p.evaluate(() => {
+      const el = document.querySelector('.unread-badge');
+      return el ? { text: el.textContent, cls: el.className } : null;
+    });
+    ok('AX1 书架显示未读章节角标', !!b && b.cls.indexOf('reading') >= 0 && b.text.length > 0,
+      JSON.stringify(b));
+    await p.close();
+  }
+  {
+    /* X2 自动翻页：段落模式切组 + 开关 */
+    const p = await newPage(browser, {
+      shelf: ['shijing'], settings: { pageMode: 'para' }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(700);
+    const before = await p.evaluate(() => document.getElementById('paraTip').textContent);
+    await p.click('[data-action="auto-page"]');
+    await p.waitForTimeout(150);
+    await p.evaluate(() => {
+      const x = document.createElement('button');
+      x.dataset.action = 'auto-speed'; x.dataset.val = '1000';
+      document.body.appendChild(x); x.click(); x.remove();
+    });
+    await p.waitForTimeout(1300);
+    const r = await p.evaluate(() => ({
+      after: document.getElementById('paraTip').textContent,
+      on: document.getElementById('autoPageBtn').dataset.on
+    }));
+    await p.click('[data-action="auto-page"]');
+    await p.waitForTimeout(100);
+    const off = await p.evaluate(() => document.getElementById('autoPageBtn').dataset.on);
+    ok('AX2 自动翻页切组并可开关',
+      before !== r.after && r.on === 'true' && off === 'false',
+      JSON.stringify({ before, ...r, off }));
+    await p.close();
+  }
+  {
+    /* X3 简繁转换：开关切换正文 */
+    const p = await newPage(browser, {
+      shelf: ['shijing'], settings: { pageMode: 'scroll', s2t: false }
+    }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(650);
+    const simp = await p.evaluate(() => document.querySelector('#readerBody').textContent);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(200);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(650);
+    await p.evaluate(() => {
+      const x = document.createElement('button');
+      x.dataset.action = 'set-s2t'; x.dataset.val = '1';
+      document.body.appendChild(x); x.click(); x.remove();
+    });
+    await p.waitForTimeout(500);
+    const trad = await p.evaluate(() => document.querySelector('#readerBody').textContent);
+    ok('AX3 简繁切换改变正文字形',
+      simp.indexOf('关关雎鸠') >= 0 && trad.indexOf('關關雎鳩') >= 0 && trad.indexOf('关关雎鸠') < 0,
+      JSON.stringify({ simp: simp.slice(0, 30), trad: trad.slice(0, 30) }));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
