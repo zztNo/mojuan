@@ -2695,6 +2695,123 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== BA：段距 / 首行缩进 / 目录筛选 / 单卷墨卷包 ===== */
+  {
+    const p = await newPage(browser, { shelf: ['shijing'], settings: { pageMode: 'scroll', fs: 19, lh: 2 } }, errs);
+    await p.goto(FILE + '#/reader/shijing/1');
+    await p.waitForTimeout(600);
+    const before = await p.evaluate(() => {
+      const el = document.querySelector('#readerPaper p[data-pi]');
+      const cs = getComputedStyle(el);
+      return { mb: parseFloat(cs.marginBottom) || 0, ti: cs.textIndent };
+    });
+    ok('BA0 默认段距与首行缩进', before.mb > 15 && before.ti !== '0px', JSON.stringify(before));
+    await p.click('[data-action="reader-settings"]');
+    await p.waitForTimeout(200);
+    await p.click('#readerPanel [data-action="set-paragap"][data-val="1.7"]');
+    await p.waitForTimeout(150);
+    await p.click('#readerPanel [data-action="set-indent"][data-val="0"]');
+    await p.waitForTimeout(200);
+    const after = await p.evaluate(() => {
+      const el = document.querySelector('#readerPaper p[data-pi]');
+      const cs = getComputedStyle(el);
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      return { mb: parseFloat(cs.marginBottom) || 0, ti: cs.textIndent, st: s.settings || {} };
+    });
+    /* 1.7em × 19px ≈ 32.3px；给 2px 余量，字体度量有小数 */
+    ok('BA1 段距切到疏朗后生效', Math.abs(after.mb - 19 * 1.7) < 2, String(after.mb));
+    ok('BA2 首行缩进关闭后为 0', after.ti === '0px', after.ti);
+    ok('BA3 排版设置已存档', Number(after.st.paraGap) === 1.7 && after.st.indent === false, JSON.stringify(after.st));
+    /* 翻页模式是另一套排版（分页测量 + 缓存键），必须一起认这两个设置 */
+    await p.click('#readerPanel [data-action="set-pagemode"][data-val="flip"]');
+    await p.waitForTimeout(900);
+    const flipTi = await p.evaluate(() => {
+      const el = document.querySelector('#flipPage p');
+      return el ? getComputedStyle(el).textIndent : 'none';
+    });
+    ok('BA4 翻页模式同样不缩进', flipTi === '0px', flipTi);
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {
+      shelf: ['daodejing'], settings: { pageMode: 'scroll' },
+      progress: { daodejing: { ch: 6, pct: 0, updated: 1 } }
+    }, errs);
+    await p.goto(FILE + '#/reader/daodejing/6');
+    await p.waitForTimeout(600);
+    await p.click('[data-action="reader-catalog"]');
+    await p.waitForTimeout(250);
+    const total = await p.evaluate(() => document.querySelectorAll('#catalogList li').length);
+    await p.click('.cat-filters [data-val="unread"]');
+    await p.waitForTimeout(150);
+    const unread = await p.evaluate(() => Array.from(document.querySelectorAll('#catalogList li')).filter((li) => !li.hidden).length);
+    /* 第 6 章为当前章，1–5 章算读过：未读应剩 total - 5 */
+    ok('BA5 未读筛选只留当前章及之后', total > 6 && unread === total - 5, unread + '/' + total);
+    const notedDisabled = await p.evaluate(() => {
+      const b = document.querySelector('.cat-filters [data-val="noted"]');
+      return b ? b.disabled : null;
+    });
+    ok('BA6 没有笔记时「有笔记」不可点', notedDisabled === true, String(notedDisabled));
+    await p.click('.cat-filters [data-val="all"]');
+    await p.waitForTimeout(150);
+    const back = await p.evaluate(() => Array.from(document.querySelectorAll('#catalogList li')).filter((li) => !li.hidden).length);
+    ok('BA7 切回全部恢复整卷目录', back === total, back + '/' + total);
+    await p.close();
+  }
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    const pack = {
+      app: 'mojuan-volume', version: 1,
+      book: { title: '墨卷包测试卷', author: '测试', desc: '端到端测试用的卷', kind: 'text', tags: ['测试'] },
+      chapters: [{ title: '第一章 起', paras: ['甲段正文', '乙段正文'] }, { title: '第二章 承', paras: ['丙段正文'] }],
+      notes: {
+        annotations: [{ ch: 1, pi: 0, text: '甲段正文', note: '批一句', color: 'jade', time: 1 }],
+        bookmarks: [{ title: '第一章 起', ch: 1, page: 0, time: 1, note: '' }],
+        bookNote: '整卷备注'
+      }
+    };
+    const send = () => p.locator('#fileInput').setInputFiles([{
+      name: '测试卷.mjz', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(pack), 'utf8')
+    }]);
+    await send();
+    await p.waitForTimeout(1800);
+    const got = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      const b = (s.localBooks || []).find((x) => x.title === '墨卷包测试卷');
+      if (!b) return null;
+      return {
+        id: b.id, chs: b.chapters.length,
+        ann: (s.annotations[b.id] || []).length, bm: (s.bookmarks[b.id] || []).length,
+        note: (s.bookNotes || {})[b.id]
+      };
+    });
+    ok('BA8 墨卷包导入成卷', !!got && got.chs === 2, JSON.stringify(got));
+    ok('BA9 笔记 / 卷签 / 整卷备注随包恢复',
+      !!got && got.ann === 1 && got.bm === 1 && got.note === '整卷备注', JSON.stringify(got));
+    if (got) {
+      await p.goto(FILE + '#/reader/' + got.id + '/1');
+      await p.waitForTimeout(600);
+      const body = await p.evaluate(() => document.querySelector('#readerPaper').textContent);
+      ok('BA10 导入卷正文可读', body.indexOf('甲段正文') >= 0, body.slice(0, 30));
+    } else ok('BA10 导入卷正文可读', false, '卷未导入');
+    /* 同一个包再导一次：指纹相同，应被跳过而不是堆出第二本 */
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(300);
+    await send();
+    await p.waitForTimeout(1200);
+    const dupN = await p.evaluate(() => (JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}').localBooks || [])
+      .filter((b) => b.title === '墨卷包测试卷').length);
+    ok('BA11 重复导入不产生副本', dupN === 1, String(dupN));
+    const [dl] = await Promise.all([
+      p.waitForEvent('download', { timeout: 6000 }).catch(() => null),
+      p.click('[data-action="export-volume"]')
+    ]);
+    ok('BA12 单卷可导出成 .mjz', !!dl && /\.mjz$/.test(dl.suggestedFilename()), dl && dl.suggestedFilename());
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

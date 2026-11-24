@@ -502,7 +502,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paraGap: 1.1, indent: true, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -989,6 +989,153 @@ MJ.sources.register({
     } catch (e) {
       toast('图片导入失败：' + (e && e.message ? e.message : '未知错误'));
     } finally { importing = false; }
+  }
+
+  /* ---------- 单卷墨卷包（.mjz） ----------
+     整库备份适合「整台设备搬走」，但常见的需求是「把这一卷发给朋友」
+     或「只把这一卷搬到平板」。墨卷包只装一卷：正文、漫画图、划线批注、
+     卷签、整卷备注一起带走；导入时重新生成 id，不动原有藏书。 */
+  const VOLUME_APP = 'mojuan-volume', VOLUME_VER = 1;
+  const VOLUME_MAX = 80 * 1024 * 1024;
+
+  function volumeFileName(title) {
+    const base = String(title || '墨卷').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || '墨卷';
+    return base + '.mjz';
+  }
+
+  async function exportVolume(id) {
+    const b = getBook(id);
+    if (!b || !b.local) { toast('只有本地导入的卷能导出成墨卷包'); return; }
+    let rec = contentCache[id];
+    if (!rec || !rec.chapters) rec = await loadContent(id);
+    if (!rec || !rec.chapters || !rec.chapters.length) { toast('这一卷的正文不在本机，无法导出'); return; }
+    const comic = b.kind === 'comic' || rec.kind === 'comic';
+    const payload = {
+      app: VOLUME_APP, version: VOLUME_VER, exportedAt: new Date().toISOString(),
+      book: {
+        title: b.title, author: b.author, desc: b.desc || '', kind: comic ? 'comic' : 'text',
+        words: b.words || '', category: b.category || '', tags: b.tags || [],
+        seal: b.seal || '', color: b.color || '', color2: b.color2 || '', motif: b.motif || '',
+        cover: (state.covers[id] || {}).image || ''
+      },
+      chapters: rec.chapters.map((c) => ({ title: c.title, paras: c.paras || [] })),
+      images: comic ? (rec.images || []) : [],
+      notes: {
+        annotations: annotationList(id), bookmarks: bookmarkList(id),
+        bookNote: (state.bookNotes || {})[id] || ''
+      }
+    };
+    let json;
+    try { json = JSON.stringify(payload); }
+    catch (e) { toast('打包失败：这一卷内容过大'); return; }
+    /* 图片卷动辄几十兆：先量再写，别让浏览器在 stringify 之后就卡死 */
+    if (json.length > VOLUME_MAX) { toast('这一卷超过 80MB，请改用完整备份'); return; }
+    const ok = downloadText(volumeFileName(b.title), [json]);
+    const noteN = payload.notes.annotations.length + payload.notes.bookmarks.length;
+    toast(ok
+      ? '已导出《' + b.title + '》' + (noteN ? ' · 含 ' + noteN + ' 条笔记与卷签' : '')
+      : '导出失败，请检查下载权限');
+  }
+
+  /* 解析墨卷包：任何字段都当作不可信输入，逐项裁剪，坏章直接丢 */
+  function parseVolumePack(data) {
+    if (!data || data.app !== VOLUME_APP) return null;
+    if (Number(data.version) > VOLUME_VER) throw new Error('这个墨卷包来自更新的墨卷，请先升级');
+    const book = (data.book && typeof data.book === 'object') ? data.book : {};
+    const chapters = (Array.isArray(data.chapters) ? data.chapters : []).map((c) => ({
+      title: String((c && c.title) || '').slice(0, 60),
+      paras: (Array.isArray(c && c.paras) ? c.paras : []).map((p) => String(p)).filter(Boolean)
+    })).filter((c) => c.paras.length);
+    if (!chapters.length) throw new Error('包里的正文是空的');
+    const images = book.kind === 'comic' && Array.isArray(data.images)
+      ? data.images.filter((s) => typeof s === 'string' && s.indexOf('data:image/') === 0)
+      : [];
+    return { book, chapters, images, notes: (data.notes && typeof data.notes === 'object') ? data.notes : {} };
+  }
+
+  async function importVolumePack(data) {
+    const pack = parseVolumePack(data);
+    if (!pack) return false;
+    const { book, chapters, images, notes } = pack;
+    const cleanMeta = (v) => String(v || '').replace(/[<>&]/g,
+      (c) => ({ '<': '〈', '>': '〉', '&': '＆' }[c]));
+    const title = cleanMeta(book.title) || '未命名墨卷';
+    const author = cleanMeta(book.author) || '本地导入';
+    const chars = chapters.reduce((a, c) => a + c.paras.join('').length, 0);
+    const words = images.length ? images.length + ' 图'
+      : (chars >= 10000 ? (chars / 10000).toFixed(1) + '万' : chars + '字');
+    /* 和 TXT / EPUB 导入共用同一套指纹：手滑导两次不会堆出两本一样的卷 */
+    const dupKey = localFingerprint(title, author, words, chapters.map((c) => c.title));
+    const dup = (state.localBooks || []).find((old) => old.local
+      && (old.fingerprint || localFingerprint(old.title, old.author, old.words, old.chapters || [])) === dupKey);
+    if (dup) { toast('《' + title + '》已在藏卷里，这次跳过了'); return true; }
+    const now = Date.now();
+    const id = 'local-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const pal = LOCAL_COLORS[(state.localBooks || []).length % LOCAL_COLORS.length];
+    const rec = { id, chapters };
+    if (images.length) { rec.kind = 'comic'; rec.images = images; }
+    await saveContent(id, rec);
+    contentCache[id] = rec; cacheTouch(id);
+    const meta = {
+      fingerprint: dupKey, id, local: true, title, author,
+      category: cleanMeta(book.category) || (images.length ? '漫画' : '本地'),
+      status: '本地',
+      tags: Array.isArray(book.tags) ? book.tags.map((t) => cleanMeta(t)).filter(Boolean).slice(0, 4) : ['本地导入'],
+      words, score: 9.0, readers: '本地卷', hot: 60,
+      motif: book.motif || LOCAL_MOTIFS[0], color: book.color || pal[0], color2: book.color2 || pal[1],
+      seal: cleanMeta(book.seal) || title.replace(/[《》\s]/g, '').charAt(0) || '卷',
+      desc: cleanMeta(book.desc) || ('由墨卷包导入，共 ' + chapters.length + (images.length ? ' 图。' : ' 章。')),
+      chapters: chapters.map((c) => c.title), addedAt: now
+    };
+    if (images.length) meta.kind = 'comic';
+    state.localBooks.unshift(meta);
+    if (!state.shelf.includes(id)) state.shelf.unshift(id);
+    state.progress[id] = { ch: 1, pct: 0, updated: now };
+    const cover = (typeof book.cover === 'string' && book.cover.indexOf('data:image/') === 0)
+      ? book.cover : (images[0] || null);
+    if (cover) { state.covers[id] = { image: cover }; markCoversDirty(); }
+    /* 笔记随卷走：换了设备也要看得见自己划过的句子、写过的想法 */
+    const anns = Array.isArray(notes.annotations) ? notes.annotations.filter((a) => a && typeof a.text === 'string') : [];
+    if (anns.length) {
+      state.annotations[id] = anns.slice(0, 5000).map((a) => ({
+        ch: Number(a.ch) || 1, pi: Number(a.pi) || 0, text: String(a.text),
+        note: String(a.note || ''), color: ['red', 'jade', 'gold'].includes(a.color) ? a.color : 'red',
+        time: Number(a.time) || now
+      }));
+    }
+    const bms = Array.isArray(notes.bookmarks) ? notes.bookmarks.filter((m) => m && m.title) : [];
+    if (bms.length) {
+      state.bookmarks[id] = bms.slice(0, 500).map((m) => ({
+        title: String(m.title), ch: Number(m.ch) || 1, page: Number(m.page) || 0,
+        time: Number(m.time) || now, note: String(m.note || '')
+      }));
+    }
+    if (notes.bookNote) state.bookNotes[id] = String(notes.bookNote).slice(0, 4000);
+    save(); renderNav(ui.nav);
+    const noteN = (anns.length + bms.length);
+    toast('已导入《' + title + '》' + (images.length ? ' · ' + images.length + ' 图' : ' · ' + chapters.length + ' 章')
+      + (noteN ? ' · 附 ' + noteN + ' 条笔记' : ''));
+    go('book/' + id);
+    return true;
+  }
+
+  /* 导入入口统一走这里：.mjz / .json 先试着当墨卷包，其余交给 TXT / EPUB / HTML 流程 */
+  async function handleImportFiles(list) {
+    const files = Array.from(list || []);
+    const packs = files.filter((f) => /\.(mjz|json)$/i.test(f.name || ''));
+    const others = files.filter((f) => packs.indexOf(f) < 0);
+    for (const f of packs) {
+      if (f.size > VOLUME_MAX) { toast('《' + f.name + '》超过 80MB，未导入'); continue; }
+      try {
+        let data = null;
+        try { data = JSON.parse(await f.text()); } catch (e) { data = null; }
+        if (data && data.app === VOLUME_APP) { await importVolumePack(data); continue; }
+        toast('《' + f.name + '》不是墨卷包');
+      } catch (err) {
+        toast('《' + f.name + '》读取失败：' + (err && err.message ? err.message : '格式不对'));
+      }
+    }
+    if (others.length) importFiles(others);
   }
 
   /* A2 配套：把当前所有自定义书源导出成 JSON，便于备份 / 分享 / 换机迁移。 */
@@ -2445,10 +2592,11 @@ MJ.sources.register({
           ${state.localBooks.map((b) => `<div class="setting-row">
             <div class="local-thumb" style="background:${b.color}">${esc(b.seal)}</div>
             <div class="st" style="cursor:pointer" data-action="open-book" data-id="${b.id}">《${esc(b.title)}》<small>${b.chapters.length} 章 · ${esc(b.words || '')} · ${esc(b.author || '')}</small></div>
+            <button class="btn btn-ghost btn-sm" data-action="export-volume" data-id="${b.id}" title="导出成墨卷包，可换设备导入">导出</button>
             <button class="btn btn-ghost btn-sm btn-danger" data-action="delete-local" data-id="${b.id}">删除</button>
           </div>`).join('')}
         </div>
-        <div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.8">正文保存在本设备的浏览器数据库中，不会上传；换设备或清理浏览器数据会丢失，请保留原文件。</div>
+        <div class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.8">正文保存在本设备的浏览器数据库中，不会上传；换设备或清理浏览器数据会丢失，请保留原文件。点「导出」可存成一份墨卷包（.mjz），连同正文、漫画图与笔记，换设备时导入即可。</div>
       </div>`;
     }
     const bmAll = [];
@@ -2567,7 +2715,7 @@ MJ.sources.register({
       </div></div>`;
     html += `<div class="section">${sectionHead('其他', '', '')}
       <div class="setting-list">
-        <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD / HTML，支持多选</small></div>${icon('right', 'ic-sm')}</div>
+        <div class="setting-row" data-action="import-books">${icon('plus')}<div class="st">导入本地卷<small>TXT / EPUB / MD / HTML / 墨卷包（.mjz），支持多选</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-comic">${icon('grid')}<div class="st">导入图片成漫画卷<small>选自己电脑里的 JPG / PNG / WebP，按顺序合成一卷；内容只存本机</small></div>${icon('right', 'ic-sm')}</div>
         ${state.localBooks.length ? `<div class="setting-row" data-action="go-local-list">${icon('trash')}<div class="st">整理 / 删除已导入的卷<small>已导入 ${state.localBooks.length} 本，可单本删除；藏卷里长按卷册可批量理卷</small></div>${icon('right', 'ic-sm')}</div>` : ''}
         <div class="setting-row" data-action="go-shelf">${icon('shelf')}<div class="st">管理我的藏卷</div>${icon('right', 'ic-sm')}</div>
@@ -2736,6 +2884,9 @@ MJ.sources.register({
     paper.style.setProperty('--chapter-ff', state.settings.chapterFont
       ? (FONT_STACKS[state.settings.chapterFont] || FONT_STACKS.song) : 'inherit');
     paper.style.setProperty('--hl-underline', (state.settings.underlineWidth || 1) + 'px');
+    /* 段距 / 首行缩进：老存档没有这两项，缺省就是原来的 1.1em + 缩进两字 */
+    paper.style.setProperty('--para-gap', (Number(state.settings.paraGap) || 1.1) + 'em');
+    paper.style.setProperty('--indent', state.settings.indent === false ? '0' : '2em');
     r.dataset.paper = state.settings.paper;
   }
   /* A6 按段落：滚动布局上一次显示 3 段，用 class 控制显隐（不用 hidden，
@@ -2798,11 +2949,13 @@ MJ.sources.register({
     m.style.setProperty('--fs', state.settings.fs + 'px');
     m.style.setProperty('--lh', state.settings.lh);
     m.style.setProperty('--ff', FONT_STACKS[state.settings.font] || FONT_STACKS.song);
+    m.style.setProperty('--para-gap', (Number(state.settings.paraGap) || 1.1) + 'em');
+    m.style.setProperty('--indent', state.settings.indent === false ? '0' : '2em');
     document.body.appendChild(m);
     const clsOf = (type) => (type === 'end' ? 'end-note' : type === 'no' ? 'reader-chapter-no' : type === 'notes' ? 'ch-notes-entry' : '');
     const nodeOf = (type) => document.createElement(type === 'h1' ? 'h1' : type === 'no' ? 'div' : 'p');
     const setIndent = (el, type, indent) => {
-      if (type === 'p' || type === 'end' || type === 'notes') el.style.textIndent = indent ? '2em' : '0';
+      if (type === 'p' || type === 'end' || type === 'notes') el.style.textIndent = indent ? 'var(--indent, 2em)' : '0';
     };
 
     /* 阶段 0：五种类型的 marginBottom 固定不变，先「写一批、读一批」算好，
@@ -2906,7 +3059,8 @@ MJ.sources.register({
   }
   function paginateCached(items, W, H, bookId, ch) {
     const st = state.settings;
-    const key = [bookId, ch, W, H, st.fs, st.lh, st.font, st.paper, flipSig(items)].join('|');
+    const key = [bookId, ch, W, H, st.fs, st.lh, st.font, st.paper,
+      Number(st.paraGap) || 1.1, st.indent === false ? 0 : 1, flipSig(items)].join('|');
     const hit = pageCache.get(key);
     if (hit) return hit;
     const pages = paginate(items, W, H);
@@ -5610,6 +5764,12 @@ MJ.sources.register({
           `<button class="rs-pill ${state.settings.fs === f ? 'active' : ''}" data-action="set-font" data-val="${f}">${f}</button>`).join('')}<button class="rs-pill" data-action="set-font" data-val="-">A−</button><button class="rs-pill" data-action="set-font" data-val="+">A＋</button></div></div>
         <div class="rs-row"><label>行距</label><div class="rs-pills">${[1.7, 2, 2.3].map((l, i) =>
           `<button class="rs-pill ${state.settings.lh === l ? 'active' : ''}" data-action="set-lh" data-val="${l}">${['紧凑', '适中', '疏朗'][i]}</button>`).join('')}</div></div>
+        <div class="rs-row"><label>段距</label><div class="rs-pills">${[[0.55, '紧凑'], [1.1, '适中'], [1.7, '疏朗']].map(([g, l]) =>
+          `<button class="rs-pill ${(Number(state.settings.paraGap) || 1.1) === g ? 'active' : ''}" data-action="set-paragap" data-val="${g}">${l}</button>`).join('')}</div></div>
+        <div class="rs-row"><label>首行缩进</label><div class="rs-pills">
+          <button class="rs-pill ${state.settings.indent !== false ? 'active' : ''}" data-action="set-indent" data-val="1">缩进两字</button>
+          <button class="rs-pill ${state.settings.indent === false ? 'active' : ''}" data-action="set-indent" data-val="0">不缩进</button>
+        </div></div>
         <div class="rs-row"><label>纸张</label><div class="rs-pills">${paperList.map(([k, c]) =>
           `<button class="rs-pill ${state.settings.paper === k ? 'active' : ''}" data-action="set-paper" data-val="${k}"><span class="paper-dot" style="background:${c};vertical-align:middle;margin-right:6px"></span>${({ xuan: '宣纸', bamboo: '青竹', sheep: '羊皮', night: '夜墨' })[k]}</button>`).join('')}</div></div>
         <div class="rs-row"><label>读墨</label><div class="rs-pills">
@@ -5673,8 +5833,17 @@ MJ.sources.register({
         : '';
       const noteMap = {};
       annotationList(b.id).forEach((a) => { noteMap[a.ch] = (noteMap[a.ch] || 0) + 1; });
+      /* 筛选只做两件真事：还没读的、记过笔记的。角标数字带上卷数，
+         不用点开就知道还有多少章要读。 */
+      const filt = ui.catalogFilter || 'all';
+      const unreadN = Math.max(0, chs.length - (cur - 1));
+      const notedN = Object.keys(noteMap).length;
       const content = kind === 'catalog'
         ? `${resumeHtml}<div class="cat-search">${icon('search', 'ic-sm')}<input id="catalogSearch" placeholder="搜章节名，或直接输入第几章" autocomplete="off"></div>
+          <div class="cat-filters">
+            ${[['all', '全部 ' + chs.length], ['unread', '未读 ' + unreadN], ['noted', '有笔记 ' + notedN]].map(([k, l]) =>
+              `<button class="${filt === k ? 'active' : ''}" data-action="cat-filter" data-val="${k}" ${k === 'noted' && !notedN ? 'disabled' : ''}>${l}</button>`).join('')}
+          </div>
           <ul class="catalog-list" id="catalogList">${chs.map((c, i) => {
             const no = i + 1;
             const n = noteMap[no] || 0;
@@ -5713,6 +5882,9 @@ MJ.sources.register({
     a11ySweep(panel); a11ySweep(drawer);
     /* 正文与工具栏先 inert 掉，Tab 就不会从抽屉里跑到背后的翻页按钮上 */
     syncReaderInert();
+    /* 筛选项是「粘」的：上次切到「未读」，这次打开目录仍按未读列，先把可见性过一遍，
+       否则会先闪一下全量列表再收起 */
+    if (kind === 'catalog' && (ui.catalogFilter || 'all') !== 'all') applyCatalogFilter();
     /* 读到第 180 章时点开目录，不能让人从第 1 章一路往下滚 */
     if (kind === 'catalog' && !drawer.hidden) {
       const list = drawer.querySelector('#catalogList');
@@ -6196,6 +6368,7 @@ MJ.sources.register({
         break;
       }
       case 'import-backup': $('#backupFileInput').click(); break;
+      case 'export-volume': exportVolume(id); break;
       case 'delete-local': deleteLocalBook(id); break;
       case 'edit-local': openMetaEditor(id); break;
       case 'meta-close': closeMetaEditor(); break;
@@ -6697,6 +6870,18 @@ MJ.sources.register({
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-lh') p.classList.toggle('active', Number(p.dataset.val) === state.settings.lh); });
         break;
       }
+      case 'set-paragap': {
+        state.settings.paraGap = Number(val) || 1.1; save(); restyleReader();
+        if (!$('#reader')) { rerender(); break; }
+        $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-paragap') p.classList.toggle('active', Number(p.dataset.val) === Number(state.settings.paraGap)); });
+        break;
+      }
+      case 'set-indent': {
+        state.settings.indent = String(val) !== '0'; save(); restyleReader();
+        if (!$('#reader')) { rerender(); break; }
+        $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-indent') p.classList.toggle('active', (p.dataset.val === '0') === (state.settings.indent === false)); });
+        break;
+      }
       case 'set-paper': {
         /* 夜墨既是「纸」也是「全站主题」：以前只改 paper，theme 还停在 day，
            底栏夜间按钮第一次点等于没反应（toast 说切了、纸色没变），
@@ -6890,6 +7075,7 @@ MJ.sources.register({
         switchChapter(cid, ch, Number(ch) === (pr.ch || 0) ? (pr.pct || 0) : 0);
         break;
       }
+      case 'cat-filter': setCatalogFilter(String(val) || 'all'); break;
       case 'toggle-bookmark': toggleBookmark(); break;
       case 'toggle-tts':
         openListen(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) || 1);
@@ -7224,20 +7410,24 @@ MJ.sources.register({
       if ($('#reader')) onReaderSelection();
     }, 20);
   });
-  /* 目录过滤：按章名匹配，或直接输入章号。走 DOM hidden、不重建列表，
-     输入焦点和滚动位置都稳；上千章也只跑一遍 forEach。 */
+  /* 目录过滤：按章名匹配，或直接输入章号；「未读 / 有笔记」是叠在搜索之上的第二层条件。
+     走 DOM hidden、不重建列表，输入焦点和滚动位置都稳；上千章也只跑一遍 forEach。 */
   function applyCatalogFilter(input) {
     const el = input || $('#catalogSearch');
     if (!el) return 0;
     const q = el.value.trim().toLowerCase();
     const num = parseInt(q, 10);
+    const filt = ui.catalogFilter || 'all';
     let shown = 0;
     $$('#catalogList li').forEach((li) => {
       const liNum = parseInt(li.dataset.ch, 10);
       /* 只比章名：li 里还挂着「读过 / ✎N / 序号」，混进来会让搜「读」命中一大片 */
       const t = li.querySelector('.cl-title');
       const name = (t ? t.textContent : li.textContent).toLowerCase();
-      const hit = !q || name.includes(q) || (!isNaN(num) && liNum === num);
+      const pass = filt === 'all' ? true
+        : filt === 'unread' ? !li.classList.contains('read')
+        : !!li.querySelector('.ch-note');
+      const hit = pass && (!q || name.includes(q) || (!isNaN(num) && liNum === num));
       li.hidden = !hit;
       if (hit) shown += 1;
     });
@@ -7245,14 +7435,22 @@ MJ.sources.register({
        空态提示会被顶到抽屉最底部 */
     const no = $('#catNoMatch');
     const list = $('#catalogList');
-    const empty = !!q && shown === 0;
+    /* 筛选也算「有条件」：切到「有笔记」时一条没有，同样要给出空态而不是一片空白 */
+    const cond = !!q || filt !== 'all';
+    const empty = cond && shown === 0;
     if (no) no.hidden = !empty;
     if (list) {
       list.hidden = empty;
-      /* 有关键词才回到顶部（结果从第一条看起）；清空搜索时保留原滚动位置 */
-      if (q) list.scrollTop = 0;
+      /* 有关键词或换了筛选才回到顶部（结果从第一条看起）；清空时保留原滚动位置 */
+      if (cond) list.scrollTop = 0;
     }
     return shown;
+  }
+  /* 切筛选：只改状态、换高亮，列表走 hidden 复用，不重建 DOM */
+  function setCatalogFilter(kind) {
+    ui.catalogFilter = kind;
+    $$('.cat-filters button').forEach((b) => b.classList.toggle('active', b.dataset.val === kind));
+    applyCatalogFilter();
   }
   document.addEventListener('input', (e) => {
     /* 组词中的拼音串不是搜索词：拿 "guanju" 去过滤会闪一下「没找到」，
@@ -7491,7 +7689,7 @@ MJ.sources.register({
 
   /* ---------- 文件选择 / 拖放导入 ---------- */
   $('#fileInput').addEventListener('change', (e) => {
-    if (e.target.files && e.target.files.length) importFiles(e.target.files);
+    if (e.target.files && e.target.files.length) handleImportFiles(e.target.files);
     e.target.value = '';
   });
   $('#imageFileInput').addEventListener('change', (e) => {
@@ -7570,7 +7768,7 @@ MJ.sources.register({
   });
   document.addEventListener('drop', (e) => {
     e.preventDefault(); dragDepth = 0; dropHint.hidden = true;
-    if (e.dataTransfer && e.dataTransfer.files.length) importFiles(e.dataTransfer.files);
+    if (e.dataTransfer && e.dataTransfer.files.length) handleImportFiles(e.dataTransfer.files);
   });
 
   /* 长按藏卷卡片 → 弹出选择菜单（展卷细看 / 更多操作 / 取消） */

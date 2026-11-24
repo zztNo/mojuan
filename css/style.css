@@ -534,7 +534,9 @@ img, svg { display: block; }
 }
 .reader-chapter-no { font-size: .68em; color: var(--reader-sub); letter-spacing: .2em; margin-bottom: 8px; }
 .reader-paper h1 { font-family: var(--chapter-ff, inherit); font-size: 1.35em; font-weight: 700; letter-spacing: .05em; margin: 0 0 34px; padding-bottom: 20px; border-bottom: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent); }
-.reader-paper p { margin: 0 0 1.1em; text-indent: 2em; text-align: justify; text-wrap: pretty; }
+/* 段距与首行缩进做成变量：设置里改的是这两个值，滚动与翻页（含分页测量）共用，
+   不会出现「翻页按 1.1em 排、滚动按别的排」这种两套版式。 */
+.reader-paper p { margin: 0 0 var(--para-gap, 1.1em); text-indent: var(--indent, 2em); text-align: justify; text-wrap: pretty; }
 .reader-paper .end-note { text-align: center; text-indent: 0; color: var(--reader-sub); font-size: .72em; margin-top: 42px; letter-spacing: .1em; }
 /* 听书时高亮当前朗读的段落：左侧朱砂竖线 + 淡暖底，眼睛跟得上耳朵 */
 .reader-paper p.lp-active, .flip-page p.lp-active {
@@ -1164,6 +1166,19 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
   border-radius: 9px; flex: none; color: var(--reader-sub);
 }
 .cat-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--reader-ink); font-size: 13px; }
+/* 目录筛选：只认「未读 / 有笔记」这两种真实需求，别的花哨分组这里不摆 */
+.cat-filters { display: flex; gap: 7px; padding: 0 16px 8px; flex: none; overflow-x: auto; scrollbar-width: none; }
+.cat-filters::-webkit-scrollbar { display: none; }
+.cat-filters button {
+  flex: none; padding: 4px 11px; border-radius: 999px; font-size: 12px; cursor: pointer;
+  color: var(--reader-sub); background: transparent;
+  border: 1px solid color-mix(in srgb, var(--reader-ink) 16%, transparent);
+}
+.cat-filters button.active {
+  color: var(--cinnabar); background: var(--cinnabar-soft);
+  border-color: color-mix(in srgb, var(--cinnabar) 40%, transparent);
+}
+.cat-filters button:disabled { opacity: .4; cursor: default; }
 .cat-nav { display: flex; gap: 8px; padding: 12px 16px; flex: none; border-top: 1px solid color-mix(in srgb, var(--reader-ink) 10%, transparent); }
 .cat-nav .btn { flex: 1; }
 .bookmark-list { flex: 1; overflow-y: auto; }
