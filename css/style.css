@@ -1128,6 +1128,18 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
   box-shadow: -10px 0 20px -8px rgba(45, 32, 20, .22);
 }
 .flip-page[hidden] { display: none; }
+/* 宽屏双栏：一屏摆两页，中间一道细缝当书脊。栏宽由 JS 写进 --col-w，
+   必须和分页测量时量的是同一个整数宽度，否则会有一行字被挤到栏外裁掉。 */
+.flip-spread { display: flex; justify-content: space-between; height: 100%; position: relative; }
+.flip-spread::before {
+  content: ''; position: absolute; left: 50%; top: 4%; bottom: 4%; width: 1px;
+  background: color-mix(in srgb, var(--reader-ink) 10%, transparent);
+  transform: translateX(-50%);
+}
+.flip-col { width: var(--col-w, 50%); height: 100%; overflow: hidden; min-width: 0; }
+/* 双栏时纸张放宽到 1180：两栏各 520 左右，和单栏手机屏差不多的行长，
+   既利用宽屏又不至于一行字横跨半个屏幕读着累。 */
+.reader.mode-flip .reader-paper.dual { max-width: 1180px; }
 /* 手指按着拖的时候别顺手选中字、也别让浏览器再算一遍滚动 */
 .reader-body.flip-dragging, .reader-body.flip-dragging * {
   user-select: none !important; -webkit-user-select: none !important;

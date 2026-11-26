@@ -2812,6 +2812,85 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== BB：宽屏双栏 ===== */
+  {
+    const p = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    p.on('console', (m) => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text()); });
+    await p.addInitScript(seed, { shelf: [], settings: { pageMode: 'flip' } });
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    /* 造一卷够长的本地书：短章在宽屏上只有一页，双栏验不出来 */
+    const paras = [];
+    for (let i = 0; i < 70; i++) {
+      paras.push('第' + (i + 1) + '段：' + '春眠不觉晓处处闻啼鸟夜来风雨声花落知多少'.repeat(4));
+    }
+    const pack = {
+      app: 'mojuan-volume', version: 1,
+      book: { title: '双栏测试卷', author: '测试', kind: 'text' },
+      chapters: [{ title: '第一章 长', paras }, { title: '第二章 短', paras: ['短章一段'] }]
+    };
+    await p.locator('#fileInput').setInputFiles([{
+      name: '双栏.mjz', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(pack), 'utf8')
+    }]);
+    await p.waitForTimeout(1600);
+    const bid = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      const b = (s.localBooks || []).find((x) => x.title === '双栏测试卷');
+      return b ? b.id : null;
+    });
+    ok('BB0 长出测试卷', !!bid, String(bid));
+    await p.goto(FILE + '#/reader/' + bid + '/1');
+    await p.waitForTimeout(1200);
+    const s1 = await p.evaluate(() => {
+      const sp = document.querySelector('#flipPage .flip-spread');
+      const cols = sp ? Array.from(sp.querySelectorAll('.flip-col')) : [];
+      return {
+        spread: !!sp, n: cols.length,
+        widths: cols.map((c) => Math.round(c.getBoundingClientRect().width)),
+        over: cols.map((c) => c.scrollHeight - c.clientHeight),
+        foot: (document.querySelector('#flipFoot b') || {}).textContent,
+        total: (document.querySelector('#flipFoot') || {}).textContent
+      };
+    });
+    ok('BB1 宽屏自动拆成双栏', s1.spread === true && s1.n === 2, JSON.stringify(s1));
+    ok('BB2 两栏等宽且没有文字溢出',
+      s1.widths[0] === s1.widths[1] && s1.over.every((v) => v <= 1), JSON.stringify(s1));
+    ok('BB3 页脚写成「1–2 / N 页」', /^1–2$/.test(s1.foot || ''), String(s1.foot) + ' | ' + s1.total);
+    await p.keyboard.press('ArrowRight');
+    await p.waitForTimeout(800);
+    const foot2 = await p.evaluate(() => (document.querySelector('#flipFoot b') || {}).textContent);
+    ok('BB4 一次翻两页（3–4）', /^3–4$/.test(foot2 || ''), String(foot2));
+    /* 设置里选单栏：立刻回到一屏一页 */
+    await p.evaluate(() => {
+      const btn = document.querySelector('[data-action="reader-settings"]');
+      if (btn) btn.click();
+    });
+    await p.waitForTimeout(300);
+    await p.click('#readerPanel [data-action="set-columns"][data-val="one"]');
+    await p.waitForTimeout(700);
+    const s2 = await p.evaluate(() => ({
+      spread: !!document.querySelector('#flipPage .flip-spread'),
+      foot: (document.querySelector('#flipFoot b') || {}).textContent
+    }));
+    ok('BB5 选单栏后回到一屏一页', s2.spread === false && /^\d+$/.test(s2.foot || ''), JSON.stringify(s2));
+    /* 窄屏（手机）即便设置成双栏也不挤成窄条 */
+    await p.evaluate(() => {
+      const btn = document.querySelector('[data-action="set-columns"][data-val="two"]');
+      if (btn) btn.click();
+    });
+    await p.waitForTimeout(500);
+    await p.setViewportSize({ width: 430, height: 900 });
+    await p.waitForTimeout(900);
+    const s3 = await p.evaluate(() => ({
+      spread: !!document.querySelector('#flipPage .flip-spread'),
+      w: document.querySelector('#flipPage .flip-col') ?
+        Math.round(document.querySelector('#flipPage .flip-col').getBoundingClientRect().width) : 0
+    }));
+    ok('BB6 窄屏下双栏自动让位给单栏', s3.spread === false, JSON.stringify(s3));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');

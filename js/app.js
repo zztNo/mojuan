@@ -502,7 +502,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paraGap: 1.1, indent: true, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paraGap: 1.1, indent: true, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', columns: 'auto', rate: 1, voiceURI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -3081,14 +3081,69 @@ MJ.sources.register({
       return `<p class="${it.type === 'end' ? 'end-note' : ''}" data-fi="${it.idx}" style="${it.indent ? '' : 'text-indent:0'}">${highlightHtml(it.text, flipState.id, flipState.ch, it.idx - 2, hidx)}</p>`;
     }).join('');
   }
+  /* ---------- 宽屏双栏 ----------
+     宽屏上一屏只摆一页，中间大片留白，翻得也快。双栏把一屏当两页使：
+     分页按「半宽」量，翻页步长变成两页，页脚写成「3–4 / 12」。
+     per 由当前版面宽度决定（设置里可选单栏 / 双栏 / 自动），不跨章缓存。 */
+  const SPREAD_GAP = 56;
+  function flipPer() { return flipState.per || 1; }
+  function flipLastStart() {
+    const n = flipState.pages.length, per = flipPer();
+    return n ? Math.floor((n - 1) / per) * per : 0;
+  }
+  /* 一屏该摆几页：看视口宽度而不是纸张宽度——纸张宽度正是这里决定的。
+     宽屏双栏要放宽纸张上限（720 → 1180），否则两栏各只剩 290px，比手机还窄。 */
+  function wantCols() {
+    const m = state.settings.columns || 'auto';
+    if (m === 'one') return 1;
+    const vw = window.innerWidth || document.documentElement.clientWidth || 9999;
+    return vw >= (m === 'two' ? 760 : 1000) ? 2 : 1;
+  }
+  /* 栏数定了才能量宽：类加上去之后再读 clientWidth，只触发一次布局 */
+  function applyCols(per) {
+    const paper = $('#readerPaper');
+    if (paper) paper.classList.toggle('dual', per === 2);
+    return per;
+  }
+  /* 分页 + 定栏数走一处：短章（只有一页）硬拆两栏会留半屏空白，
+     这时退回单栏整幅排版；栏数一变纸张宽也变，宽度得重新量。 */
+  function paginateFlip(fp, items, H, bookId, ch) {
+    let per = applyCols(wantCols());
+    let W = fp.clientWidth;
+    let colW = per === 2 ? Math.max(160, Math.floor((W - SPREAD_GAP) / 2)) : W;
+    let pages = paginateCached(items, colW, H, bookId, ch);
+    if (per === 2 && pages.length < 2) {
+      per = applyCols(1);
+      W = fp.clientWidth;
+      colW = W;
+      pages = paginateCached(items, W, H, bookId, ch);
+    }
+    return { pages, per, colW };
+  }
+  function spreadInner(pos) {
+    const per = flipPer();
+    if (per !== 2) return pageInner(pos);
+    const colW = flipState.colW || 0;
+    return `<div class="flip-spread" style="--col-w:${colW}px">`
+      + `<div class="flip-col">${pageInner(pos)}</div>`
+      + `<div class="flip-col">${pageInner(pos + 1)}</div></div>`;
+  }
   /* 落定某一页：换内容、页脚、进度。直接跳页与动画收尾都走这里 */
   function commitPage(pos) {
     const fp = $('#flipPage'); if (!fp) return;
-    flipState.page = pos;
-    fp.innerHTML = pageInner(pos);
+    const per = flipPer(), n = flipState.pages.length;
+    /* 双栏时 page 永远停在「一屏的第一页」，跳页 / 进度条给来任意页码都先归位 */
+    const start = Math.max(0, Math.min(flipLastStart(), Math.floor(pos / per) * per));
+    flipState.page = start;
+    fp.innerHTML = spreadInner(start);
     const foot = $('#flipFoot');
-    if (foot) foot.innerHTML = `第 ${flipState.ch} 章 · <b>${flipState.page + 1}</b> / ${flipState.pages.length} 页`;
-    const pct = flipState.pages.length > 1 ? flipState.page / (flipState.pages.length - 1) : 0;
+    if (foot) {
+      const to = Math.min(start + per, n);
+      const label = per > 1 && to > start + 1 ? (start + 1) + '–' + to : String(start + 1);
+      foot.innerHTML = `第 ${flipState.ch} 章 · <b>${label}</b> / ${n} 页`;
+    }
+    /* 双栏时 page 是「一屏的第一页」，末屏起点可能小于 n-1，按它算比例才能走到 100% */
+    const pct = flipLastStart() > 0 ? start / flipLastStart() : 0;
     state.progress[flipState.id] = { ch: flipState.ch, pct, updated: Date.now() };
     state.lastRead = flipState.id;
     scheduleSave();
@@ -3113,7 +3168,7 @@ MJ.sources.register({
   /* 把「旁边那页」铺好，并放到屏幕外对应的那一侧 */
   function ensureAdj(pos, dir, W) {
     const adj = $('#flipAdj'); if (!adj) return null;
-    adj.innerHTML = pageInner(pos);
+    adj.innerHTML = spreadInner(pos);
     adj.hidden = false;
     adj.style.transform = 'translate3d(' + (dir * W) + 'px,0,0)';
     return adj;
@@ -3126,8 +3181,8 @@ MJ.sources.register({
   /* 点击 / 键盘翻页：新页从一侧滑入、旧页滑出，两页一起动才是完整的翻页 */
   function flipSlide(delta) {
     const fp = $('#flipPage'), adj = $('#flipAdj');
-    const np = flipState.page + delta;
-    if (!fp || !adj || flipBusy || np < 0 || np >= flipState.pages.length) return false;
+    const np = flipState.page + delta * flipPer();
+    if (!fp || !adj || flipBusy || np < 0 || np > flipLastStart()) return false;
     /* 老 WebView 没有 Web Animations，别把翻页卡死在这里，交给调用方直接换页 */
     if (typeof fp.animate !== 'function') return false;
     const W = fp.clientWidth || 1;
@@ -3180,8 +3235,8 @@ MJ.sources.register({
     const mode = readerRoot.dataset.mode;
     if (mode === 'para') { flipParaGroup(1); return; }
     if (mode === 'flip') {
-      if (flipState.pages.length && flipState.page < flipState.pages.length - 1) {
-        commitPage(flipState.page + 1);
+      if (flipState.pages.length && flipState.page < flipLastStart()) {
+        commitPage(flipState.page + flipPer());
       } else {
         const id = readerRoot.dataset.currentBook, ch = Number(readerRoot.dataset.currentCh) || 1;
         const b = getBook(id);
@@ -3217,14 +3272,14 @@ MJ.sources.register({
     if (!fs.pages.length || flipBusy) return;
     /* 页码状态必须属于当前这一卷这一章：降级版面、刚换章、换卷的空档里都可能对不上 */
     if (fs.id !== readerRoot.dataset.currentBook || fs.ch !== (Number(readerRoot.dataset.currentCh) || 1)) return;
-    const np = fs.page + delta;
+    const np = fs.page + delta * flipPer();
     const totalCh = chapterList(getBook(fs.id)).length;
     if (np < 0) {
       if (fs.ch > 1) { ui.flipHint = 'last'; ui.flipDir = 'prev'; switchChapter(fs.id, fs.ch - 1); }
       else toast('已经是第一页了');
       return;
     }
-    if (np >= fs.pages.length) {
+    if (np > flipLastStart()) {
       if (fs.ch < totalCh) { ui.flipDir = 'next'; switchChapter(fs.id, fs.ch + 1); }
       else toast('已经是最后一页了');
       return;
@@ -3284,8 +3339,8 @@ MJ.sources.register({
     const cur = flipState.page;
     /* 往后翻：底下摆目标页，正面（当前页）翻走后露出来；
        往前翻：底下摆当前页，正面换成目标页，从书脊翻回来盖住。 */
-    L.adj.innerHTML = pageInner(dir > 0 ? pos : cur);
-    L.fp.innerHTML = pageInner(dir > 0 ? cur : pos);
+    L.adj.innerHTML = spreadInner(dir > 0 ? pos : cur);
+    L.fp.innerHTML = spreadInner(dir > 0 ? cur : pos);
     L.adj.hidden = false; L.shade.hidden = false;
     L.back.hidden = true; L.back.innerHTML = '';
     L.adj.style.transform = '';
@@ -3321,8 +3376,8 @@ MJ.sources.register({
   }
   function flipRealistic(delta) {
     const L0 = realLayers(); if (!L0 || flipBusy) return false;
-    const np = flipState.page + delta;
-    if (np < 0 || np >= flipState.pages.length) return false;
+    const np = flipState.page + delta * flipPer();
+    if (np < 0 || np > flipLastStart()) return false;
     if (typeof L0.fp.animate !== 'function' || !REAL_3D_OK) return false;
     const L = realPrepare(np, delta); if (!L) return false;
     flipBusy = true;
@@ -3335,8 +3390,8 @@ MJ.sources.register({
   }
   function realDragSettle(dir, dx, W, done) {
     const L = realLayers(); if (!L) return;
-    const target = flipState.page + dir;
-    const go = done && target >= 0 && target < flipState.pages.length;
+    const target = flipState.page + dir * flipPer();
+    const go = done && target >= 0 && target <= flipLastStart();
     const p0 = Math.max(0, Math.min(1, (-dx * dir) / W));
     if (typeof L.fp.animate !== 'function') {
       realClear(); if (go) commitPage(target); return;
@@ -3402,8 +3457,8 @@ MJ.sources.register({
       }
       /* 拖回起点再往另一边摆：把对侧那页换过来，两个方向都能跟手 */
       const want = ev.clientX < d.x ? 1 : -1;
-      const npWant = flipState.page + want;
-      if (want !== d.dir && Math.abs(ev.clientX - d.x) > 20 && npWant >= 0 && npWant < flipState.pages.length) {
+      const npWant = flipState.page + want * flipPer();
+      if (want !== d.dir && Math.abs(ev.clientX - d.x) > 20 && npWant >= 0 && npWant <= flipLastStart()) {
         d.dir = want;
         if (d.mode === 'real') realPrepare(npWant, want);
         else ensureAdj(npWant, want, d.W);
@@ -3460,8 +3515,8 @@ MJ.sources.register({
     if (animMode() === 'realistic' && REAL_3D_OK) return realDragSettle(dir, dx, W, done);
     const fp = $('#flipPage'), adj = $('#flipAdj');
     if (!fp || !adj) return;
-    const target = flipState.page + dir;
-    const go = done && target >= 0 && target < flipState.pages.length;
+    const target = flipState.page + dir * flipPer();
+    const go = done && target >= 0 && target <= flipLastStart();
     /* 老 WebView：没有动画就直接落位，至少行为是对的 */
     if (typeof fp.animate !== 'function') {
       fp.style.transform = '';
@@ -3498,7 +3553,7 @@ MJ.sources.register({
     const ch = Math.max(1, Number(readerRoot.dataset.currentCh) || 1);
     let inner = 0;
     if (state.settings.pageMode === 'flip' && flipState.id === id && flipState.ch === ch && flipState.pages.length > 1)
-      inner = flipState.page / (flipState.pages.length - 1);
+      inner = flipState.page / Math.max(1, flipLastStart());
     else inner = (state.progress[id] || {}).pct || 0;
     return clamp01((ch - 1 + clamp01(inner)) / total);
   }
@@ -5340,14 +5395,17 @@ MJ.sources.register({
     if (state.settings.pageMode !== 'flip' || !$('#reader') || !flipState.pages.length) return;
     const b = getBook(flipState.id); if (!b) return;
     const fp = $('#flipPage'); if (!fp) return;
-    const W = fp.clientWidth, H = fp.clientHeight;
-    if (W < 60 || H < 80) return;
     /* 用「当前页第一个字在全章的偏移」当锚点。字号一变页数全变，
        按页码比例定位会漂到别处，按字数锚点能稳稳停在原来读到的那句话上。 */
     const anchor = flipCharOffset(flipState.pages, flipState.page);
-    const pages = paginateCached(flipItems(b, flipState.ch), W, H, b.id, flipState.ch);
-    flipState.pages = pages;
-    flipState.page = flipPageAtOffset(pages, anchor);
+    applyCols(wantCols());
+    const W = fp.clientWidth, H = fp.clientHeight;
+    if (W < 60 || H < 80) return;
+    const pg = paginateFlip(fp, flipItems(b, flipState.ch), H, b.id, flipState.ch);
+    flipState.pages = pg.pages;
+    flipState.per = pg.per;
+    flipState.colW = pg.colW;
+    flipState.page = flipPageAtOffset(pg.pages, anchor);
     renderFlipPage('');
   }
   /* 连点字号 / 行距时，只在停手后重排一次：每次点击都整章重算会把界面拖住，
@@ -5489,15 +5547,17 @@ MJ.sources.register({
     const pr = state.progress[b.id];
     if (state.settings.pageMode === 'flip') {
       const fp = $('#flipPage'); if (!fp) return;
+      applyCols(wantCols());
       const W = fp.clientWidth, H = fp.clientHeight;
       if (W < 60 || H < 80) return;
-      const pages = paginateCached(flipItems(b, ch), W, H, b.id, ch);
+      const pg = paginateFlip(fp, flipItems(b, ch), H, b.id, ch);
+      const pages = pg.pages;
       let page = 0;
       if (ui.flipHint === 'last') page = pages.length - 1;
       else if (pr && pr.ch === ch && pr.pct > 0) page = Math.min(pages.length - 1, Math.round(pr.pct * (pages.length - 1)));
       if (ui.flipTargetPage != null) { page = Math.min(pages.length - 1, ui.flipTargetPage); ui.flipTargetPage = null; }
       ui.flipHint = null;
-      flipState = { pages, page, id: b.id, ch };
+      flipState = { pages, page, id: b.id, ch, per: pg.per, colW: pg.colW };
       renderFlipPage(dir || '');
     } else {
       ui.flipTargetPage = null; /* 滚动分支不消费它，留着会污染下次切回翻页模式 */
@@ -5776,6 +5836,10 @@ MJ.sources.register({
           <button class="rs-pill ${state.settings.pageMode === 'flip' ? 'active' : ''}" data-action="set-pagemode" data-val="flip">左右翻页</button>
           <button class="rs-pill ${state.settings.pageMode === 'scroll' ? 'active' : ''}" data-action="set-pagemode" data-val="scroll">上下滚动</button>
           <button class="rs-pill ${state.settings.pageMode === 'para' ? 'active' : ''}" data-action="set-pagemode" data-val="para">按段落</button>
+        </div></div>
+        <div class="rs-row"><label>版式</label><div class="rs-pills">
+          ${[['auto', '自动'], ['one', '单栏'], ['two', '双栏']].map(([k, l]) =>
+            `<button class="rs-pill ${(state.settings.columns || 'auto') === k ? 'active' : ''}" data-action="set-columns" data-val="${k}">${l}</button>`).join('')}
         </div></div>
         <div class="rs-row"><label>翻页</label><div class="rs-pills">
           ${[['slide', '滑动'], ['realistic', '仿真'], ['fade', '淡入'], ['none', '无动画']].map(([k, l]) =>
@@ -6898,6 +6962,14 @@ MJ.sources.register({
         save(); applyTheme(); applyReaderStyle();
         if (!$('#reader')) { rerender(); break; }
         $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-paper') p.classList.toggle('active', p.dataset.val === val); });
+        break;
+      }
+      case 'set-columns': {
+        state.settings.columns = val === 'one' || val === 'two' ? val : 'auto';
+        save();
+        $$('#readerPanel .rs-pill').forEach((p) => { if (p.dataset.action === 'set-columns') p.classList.toggle('active', p.dataset.val === state.settings.columns); });
+        /* 栏数变了就得按新宽度重新分页，页码会变，锚点仍在当前页首字上 */
+        if ($('#reader')) reflowFlip();
         break;
       }
       case 'set-pagemode':
