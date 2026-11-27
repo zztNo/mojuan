@@ -813,6 +813,17 @@ img, svg { display: block; }
   transform-origin: top center; transition: transform .18s ease;
 }
 .comic-page.cropped img { width: auto; max-width: none; height: 100vh; object-fit: cover; object-position: center; }
+/* 双图并排：两栏等分，中缝一道发丝线，像实体书对开 */
+.comic-page.dual { display: flex; align-items: flex-start; justify-content: center; gap: 0; }
+/* 两图并排时纸张也要放宽，否则 720px 里各分 360，还没手机屏宽 */
+.reader-paper:has(.comic-page.dual) { max-width: 1180px; }
+.comic-page.dual img { flex: 1 1 50%; width: 50%; min-width: 0; }
+.comic-page.dual img + img { border-left: 1px solid color-mix(in srgb, var(--reader-ink) 14%, transparent); }
+.comic-page.dual.cropped img { flex: 1 1 0; width: auto; height: 100vh; object-fit: cover; }
+/* 书源检测结果：绿勾 / 朱砂叉，单独一行，别跟「现有 N 卷」挤在一起换行 */
+.src-health { display: block; margin-top: 3px; font-weight: 600; }
+.src-health.ok { color: #2f7d4f; }
+.src-health.bad { color: var(--cinnabar); }
 .comic-tools {
   position: sticky; bottom: 0; z-index: 4; display: flex; justify-content: center; gap: 8px;
   padding: 8px; background: color-mix(in srgb, var(--reader-bg) 88%, transparent);

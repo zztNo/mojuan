@@ -709,7 +709,8 @@
     autoPage: false, autoPageMs: 6000,
     searchHits: [], searchIdx: -1, searchNavOn: false, searchBook: '',
     bmNote: -1, panelFrom: null, searchFrom: null, modalFrom: null,
-    tocLoading: false, tocFailed: false, tocOffline: false, storageFull: false
+    tocLoading: false, tocFailed: false, tocOffline: false, storageFull: false,
+    srcHealth: {}, srcChecking: false, comicPer: 1
   };
   let readerSession = null;
   let lastFocus = null;   /* { hash, key }：跨页返回时把焦点还给原来那个控件 */
@@ -1145,6 +1146,68 @@ MJ.sources.register({
     const payload = { app: 'mojuan-sources', version: 1, exportedAt: new Date().toISOString(), sources: list };
     const ok = downloadText('墨卷书源-' + today() + '.json', JSON.stringify(payload, null, 2));
     toast(ok ? '已导出 ' + list.length + ' 个书源' : '导出失败，请检查下载权限');
+  }
+
+  /* ---------- 书源可用性检测 ---------- */
+  /* 只测可视化书源：它们有确定的目录地址，拉一次书单就知道通不通。
+     内置源（公版 / 维基文库）不是「挂没挂」的问题，标成「内置」更诚实；
+     探测失败最常见的两种是超时和 CORS，错误串裁短后再显示，别让一行字撑破版。 */
+  function shortErr(e) {
+    const m = String((e && (e.message || e.name)) || e || '未知错误');
+    if (/abort/i.test(m)) return '超时';
+    if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '取不到（跨域被拦或断网）';
+    return m.length > 22 ? m.slice(0, 22) + '…' : m;
+  }
+  async function probeSource(s) {
+    if (!s._cfg || !s._cfg.listUrl) return { skip: true, msg: '内置源' };
+    const t0 = (window.performance && performance.now()) || Date.now();
+    const ms = () => Math.round((((window.performance && performance.now()) || Date.now()) - t0));
+    try {
+      const list = await s.metas();
+      const n = Array.isArray(list) ? list.length : 0;
+      /* 卷数前面那行「现有 N 卷」已经报过了，这里只说「通没通、多快」 */
+      return n ? { ok: true, msg: '通 · ' + ms() + 'ms' } : { ok: false, msg: '目录为空' };
+    } catch (e) {
+      return { ok: false, msg: shortErr(e) };
+    }
+  }
+  /* 并发 3：再多就容易把本地代理和对方站点一起打挂，也更像在压测别人 */
+  async function checkSources() {
+    if (ui.srcChecking) return;
+    const targets = (SRC.list() || []).filter((s) => s.enabled !== false && s._cfg && s._cfg.listUrl);
+    if (!targets.length) { toast('没有可检测的在线书源：内置源无需检测'); return; }
+    ui.srcChecking = true;
+    ui.srcHealth = {};
+    paintHealth();
+    let i = 0;
+    const worker = async () => {
+      while (i < targets.length) {
+        const s = targets[i++];
+        ui.srcHealth[s.id] = await probeSource(s);
+        paintHealth();
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    ui.srcChecking = false;
+    paintHealth();
+    const okN = targets.filter((s) => (ui.srcHealth[s.id] || {}).ok).length;
+    toast('检测完成：' + okN + ' / ' + targets.length + ' 个书源可用');
+  }
+  /* 直接改已有 DOM，不 rerender：检测过程中整页重建会把滚动位置和焦点甩掉 */
+  function paintHealth() {
+    $$('[data-health-for]').forEach((el) => {
+      const h = (ui.srcHealth || {})[el.dataset.healthFor];
+      if (!h || h.skip) { el.hidden = true; el.textContent = ''; return; }
+      el.hidden = false;
+      el.className = 'src-health ' + (h.ok ? 'ok' : 'bad');
+      el.textContent = (h.ok ? '✓ ' : '✕ ') + h.msg;
+    });
+    const hint = $('#srcCheckHint');
+    if (!hint) return;
+    const done = Object.keys(ui.srcHealth || {}).length;
+    hint.textContent = ui.srcChecking
+      ? '正在检测…（已完成 ' + done + ' 个）'
+      : done ? '已测 ' + done + ' 个 · 再点可重测' : '逐个拉一次目录，看哪个源挂了';
   }
 
   /* 解析导入的书源 JSON：认墨卷自己的导出格式、纯配置数组 / 单个配置。
@@ -2701,13 +2764,15 @@ MJ.sources.register({
           const group = s.group ? ' · ' + esc(s.group) : '';
           const dup = (s._cfg && s._cfg.listUrl)
             ? SRC.list().filter((x) => x !== s && x._cfg && x._cfg.listUrl === s._cfg.listUrl).length : 0;
+          const h = (ui.srcHealth || {})[s.id];
           return `<div class="setting-row">
             ${icon(s.online ? 'store' : 'book')}
-            <div class="st">${esc(s.name)}<small>${esc(s.desc)}${group}${dup ? ' · ⚠ 与 ' + dup + ' 个源同地址' : ''} · 现有 ${n} 卷${s.online ? ' · 需联网' : ' · 离线可读'}</small></div>
+            <div class="st">${esc(s.name)}<small>${esc(s.desc)}${group}${dup ? ' · ⚠ 与 ' + dup + ' 个源同地址' : ''} · 现有 ${n} 卷${s.online ? ' · 需联网' : ' · 离线可读'}<span class="src-health ${h && h.ok ? 'ok' : 'bad'}" data-health-for="${esc(s.id)}" ${h && !h.skip ? '' : 'hidden'}>${h && !h.skip ? (h.ok ? '✓ ' : '✕ ') + esc(h.msg) : ''}</span></small></div>
             ${s._cfg ? `<button class="btn btn-ghost btn-sm" data-action="source-edit" data-id="${esc(s.id)}">编辑</button>` : ''}
             <button class="switch ${s.enabled === false ? '' : 'on'}" data-action="toggle-source" data-id="${esc(s.id)}" aria-label="${esc(s.name)}"></button>
           </div>`;
         }).join('')}
+        <div class="setting-row${ui.srcChecking ? ' src-checking' : ''}" data-action="check-sources">${icon('refresh')}<div class="st">检测书源可用性<small id="srcCheckHint">${ui.srcChecking ? '正在检测…' : Object.keys(ui.srcHealth || {}).length ? '已测 ' + Object.keys(ui.srcHealth).length + ' 个 · 再点可重测' : '逐个拉一次目录，看哪个源挂了'}</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="add-source">${icon('plus')}<div class="st">添加书源（可视化）<small>填网页地址与选择器即可，不需要写代码；仅用于公版或你有权使用的资源</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="add-source-js">${icon('brush')}<div class="st">添加书源（JS 插件）<small>高级用法：自己写 MJ.sources.register 代码，完全自定义取书逻辑</small></div>${icon('right', 'ic-sm')}</div>
         <div class="setting-row" data-action="import-source-json">${icon('book')}<div class="st">导入书源 / 订阅 JSON<small>选一个 .json 文件批量导入书源与订阅配置</small></div>${icon('right', 'ic-sm')}</div>
@@ -2749,8 +2814,13 @@ MJ.sources.register({
     const errMsg = chapterErrMsg(b, ch);
     /* 漫画卷一次一图，不走文字分页；图片从内容记录里取 */
     const isComic = b.kind === 'comic';
-    const comicImg = isComic && contentCache[b.id]
-      ? (contentCache[b.id].images || [])[ch - 1] : null;
+    const comicImgs = isComic && contentCache[b.id] ? (contentCache[b.id].images || []) : [];
+    const comicImg = comicImgs[ch - 1] || null;
+    /* 宽屏两台并排：一张一页的漫画在 27 寸屏上会缩成细长纸带，
+       两图并排正好接近实体书的对开。没有下一张时不硬拆，免得留半屏空白。 */
+    const comicTwo = isComic && wantCols() === 2 && !!comicImgs[ch];
+    const comicNext = comicTwo ? comicImgs[ch] : null;
+    ui.comicPer = comicTwo ? 2 : 1;
     /* 只有一句提示时分页没有意义，直接走滚动布局 */
     const flip = state.settings.pageMode === 'flip' && !errMsg && !isComic;
     const errBlock = `<div class="reader-error">
@@ -2771,9 +2841,10 @@ MJ.sources.register({
           <div class="reader-chapter-no">${esc(b.title)} · ${esc(b.author)}</div>
           <h1>${esc(cur.title)}</h1>
           ${errMsg ? errBlock : (isComic
-            ? `<div class="comic-page" data-ch="${ch}">
+            ? `<div class="comic-page${comicTwo ? ' dual' : ''}" data-ch="${ch}" data-per="${comicTwo ? 2 : 1}">
                 ${comicImg ? `<img id="comicImg" src="${comicImg}" alt="第 ${ch} 图" draggable="false">`
                   : '<div class="reader-error"><p>这一图没能读取，请重新导入这卷</p></div>'}
+                ${comicNext ? `<img class="comic-img2" src="${comicNext}" alt="第 ${ch + 1} 图" draggable="false">` : ''}
                </div>
                <div class="comic-tools" id="comicTools">
                  <button class="btn btn-ghost btn-sm" data-action="comic-zoom" data-val="-" title="缩小">−</button>
@@ -3098,6 +3169,24 @@ MJ.sources.register({
     if (m === 'one') return 1;
     const vw = window.innerWidth || document.documentElement.clientWidth || 9999;
     return vw >= (m === 'two' ? 760 : 1000) ? 2 : 1;
+  }
+  /* 漫画双图并排时一次翻两图，否则会绊在已被并排显示的那张上 */
+  function comicPer() {
+    const pg = $('.comic-page');
+    return pg ? Number(pg.dataset.per || 1) : 1;
+  }
+  /* 上下图/上下章共用：漫画按「屏」走，文字按章走。
+     并排显示到最后一屏时，再点下一章不该把自己重渲染成落单的最后一张。 */
+  function comicGo(dir) {
+    const id = readerRoot.dataset.currentBook; if (!id) return;
+    const ch = Number(readerRoot.dataset.currentCh) || 1;
+    const comic = !!$('.comic-page');
+    if (!comic) { switchChapter(id, ch + dir); return; }
+    const total = chapterList(getBook(id)).length;
+    const next = ch + dir * comicPer();
+    if (next < 1) { toast('已经是第一图了'); return; }
+    if (next > total) { toast('已经是最后一图了'); return; }
+    switchChapter(id, next);
   }
   /* 栏数定了才能量宽：类加上去之后再读 clientWidth，只触发一次布局 */
   function applyCols(per) {
@@ -6403,9 +6492,12 @@ MJ.sources.register({
       case 'comic-zoom': {
         const img = $('#comicImg'); if (!img) break;
         const cur = Number(img.dataset.zoom || 1);
-        let z = val === 'fit' ? 1 : (val === '+' ? Math.min(3, cur + 0.25) : Math.max(0.5, cur - 0.25));
-        img.dataset.zoom = String(z);
-        img.style.transform = 'scale(' + z + ')';
+        const z = val === 'fit' ? 1 : (val === '+' ? Math.min(3, cur + 0.25) : Math.max(0.5, cur - 0.25));
+        /* 双图并排时两张一起缩：只放大左边那张，同屏两张大小不一，看着像排版出错 */
+        $$('.comic-page img').forEach((x) => {
+          x.dataset.zoom = String(z);
+          x.style.transform = 'scale(' + z + ')';
+        });
         break;
       }
       case 'comic-crop': {
@@ -6414,6 +6506,7 @@ MJ.sources.register({
         toast(pg.classList.contains('cropped') ? '切边模式：铺满屏幕' : '适应宽度');
         break;
       }
+      case 'check-sources': checkSources(); break;
       case 'export-backup': exportBackup(); break;
       case 'clean-covers': {
         /* 只掉图片，保留每本书选过的底纹 / 配色 / 印章，封面还会按原风格重新生成，
@@ -7113,7 +7206,7 @@ MJ.sources.register({
         break;
       }
       case 'search-all-cancel': cancelSearchAll(); break;
-      case 'reader-prev': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) - 1); break;
+      case 'reader-prev': comicGo(-1); break;
       case 'set-s2t': {
         state.settings.s2t = val === '1'; save();
         $$('#readerPanel .rs-pill').forEach((x) => { if (x.dataset.action === 'set-s2t') x.classList.toggle('active', (x.dataset.val === '1') === state.settings.s2t); });
@@ -7127,7 +7220,7 @@ MJ.sources.register({
         $$('#readerPanel .rs-pill').forEach((x) => { if (x.dataset.action === 'auto-speed') x.classList.toggle('active', Number(x.dataset.val) === ui.autoPageMs); });
         break;
       }
-      case 'reader-next': switchChapter(readerRoot.dataset.currentBook, Number(readerRoot.dataset.currentCh) + 1); break;
+      case 'reader-next': comicGo(1); break;
       case 'reader-retry': {
         /* 断网时点「重新取回」：把这一章的失败结果从缓存里清掉再拉一次 */
         const rid = readerRoot.dataset.currentBook, rch = Number(readerRoot.dataset.currentCh) || 1;
@@ -7878,12 +7971,28 @@ MJ.sources.register({
     clearTimeout(pressTimer); pressTimer = null; menuJustOpened = false;
   });
 
-  let flipResizeTimer = null;
+  let flipResizeTimer = null, comicResizeTimer = null;
   window.addEventListener('resize', () => {
     markScrollableRows($('#view'));
-    if (state.settings.pageMode !== 'flip' || !$('#reader')) return;
-    clearTimeout(flipResizeTimer);
-    flipResizeTimer = setTimeout(reflowFlip, 200);
+    if (!$('#reader')) return;
+    if (state.settings.pageMode === 'flip') {
+      clearTimeout(flipResizeTimer);
+      flipResizeTimer = setTimeout(reflowFlip, 200);
+      return;
+    }
+    /* 漫画卷来回跨 1000px 时单图/双图要跟着换：这里按「屏」重渲染同一图号 */
+    if ($('.comic-page')) {
+      clearTimeout(comicResizeTimer);
+      comicResizeTimer = setTimeout(() => {
+        const pg = $('.comic-page');
+        const id = readerRoot.dataset.currentBook;
+        if (!pg || !id) return;
+        const ch = Number(readerRoot.dataset.currentCh) || 1;
+        const want = wantCols() === 2 && ch < chapterList(getBook(id)).length ? 2 : 1;
+        if (Number(pg.dataset.per || 1) === want) return;
+        showReader(id, ch);
+      }, 220);
+    }
   });
 
   /* 路由切换（App 内导航）不再停听书——退出阅读器后朗读收成迷你条继续。

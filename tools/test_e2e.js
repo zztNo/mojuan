@@ -2891,6 +2891,112 @@ const TTS_MOCK = () => {
     await p.close();
   }
 
+  /* ===== BC：漫画宽屏双图并排 ===== */
+  {
+    const p = await newPage(browser, {}, errs);
+    await p.setViewportSize({ width: 1280, height: 860 });
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    const b64 = await p.evaluate(() => {
+      const out = [];
+      for (let k = 0; k < 3; k++) {
+        const c = document.createElement('canvas'); c.width = 600; c.height = 900;
+        const x = c.getContext('2d'); x.fillStyle = ['#e8e0d0', '#dfe7dc', '#e6dce7'][k]; x.fillRect(0, 0, 600, 900);
+        out.push(c.toDataURL('image/png').split(',')[1]);
+      }
+      return out;
+    });
+    await p.locator('#imageFileInput').setInputFiles(b64.map((b, i) =>
+      ({ name: 's_' + (i + 1) + '.png', mimeType: 'image/png', buffer: Buffer.from(b, 'base64') })));
+    await p.waitForTimeout(1500);
+    const cid = await p.evaluate(() => (JSON.parse(localStorage.getItem('mojuan.state.v1')).localBooks[0] || {}).id);
+    await p.goto(FILE + '#/reader/' + cid + '/1');
+    await p.waitForTimeout(1200);
+    const d1 = await p.evaluate(() => {
+      const pg = document.querySelector('.comic-page');
+      const imgs = Array.from(pg.querySelectorAll('img'));
+      return {
+        per: pg.dataset.per, n: imgs.length,
+        widths: imgs.map((x) => Math.round(x.getBoundingClientRect().width)),
+        paper: Math.round(document.querySelector('#readerPaper').getBoundingClientRect().width)
+      };
+    });
+    ok('BC1 宽屏漫画并排两图', d1.per === '2' && d1.n === 2, JSON.stringify(d1));
+    ok('BC2 两图等宽且纸张放宽', d1.widths[0] === d1.widths[1] && d1.paper > 1000, JSON.stringify(d1));
+    /* 窄屏让位：一屏一图，不留半屏空白 */
+    await p.setViewportSize({ width: 430, height: 900 });
+    await p.waitForTimeout(700);
+    const d2 = await p.evaluate(() => {
+      const pg = document.querySelector('.comic-page');
+      return { per: pg.dataset.per, n: pg.querySelectorAll('img').length };
+    });
+    ok('BC3 窄屏退回单图', d2.per === '1' && d2.n === 1, JSON.stringify(d2));
+    /* 再拉宽应自动并排回来 */
+    await p.setViewportSize({ width: 1280, height: 860 });
+    await p.waitForTimeout(700);
+    const d3 = await p.evaluate(() => {
+      const pg = document.querySelector('.comic-page');
+      return { per: pg.dataset.per, n: pg.querySelectorAll('img').length };
+    });
+    ok('BC4 拉宽后自动恢复并排', d3.per === '2' && d3.n === 2, JSON.stringify(d3));
+    await p.click('[data-action="comic-zoom"][data-val="+"]');
+    await p.waitForTimeout(180);
+    const zooms = await p.evaluate(() =>
+      Array.from(document.querySelectorAll('.comic-page img')).map((x) => x.dataset.zoom));
+    ok('BC5 缩放同时作用于两图', zooms.length === 2 && zooms.every((v) => v === '1.25'), JSON.stringify(zooms));
+    /* 第 2 图已经并排显示过，下一章应直接到第 3 图 */
+    await p.click('[data-action="reader-next"]');
+    await p.waitForTimeout(900);
+    const cch = await p.evaluate(() => document.querySelector('#readerRoot').dataset.currentCh);
+    ok('BC6 双图时下一章跳两图（到第 3 图）', cch === '3', String(cch));
+    await p.close();
+  }
+
+  /* ===== BD：书源批量可用性检测 ===== */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    /* 这个用例故意让一个源返回 500，浏览器的「加载失败」噪音不算脚本错误 */
+    p.on('console', (m) => {
+      if (m.type() === 'error' && !/status of 500/.test(m.text())) errs.push('CONSOLE ' + m.text());
+    });
+    await p.addInitScript(() => {
+      localStorage.setItem('mojuan.state.v1', JSON.stringify({ v: 5, shelf: ['shijing'], settings: { pageMode: 'scroll' } }));
+      const mk = (cfg) => '/* mj-visual:' + cfg.id + ' */MJ.sources.register(MJ.sourceKit.makeSource(' + JSON.stringify(cfg) + '));';
+      localStorage.setItem('mojuan.sources.custom', JSON.stringify([
+        mk({ id: 'ok-src', name: '好源', desc: '检测用', listUrl: 'http://mj.test/list', bookList: 'li', bookTitle: 'a', bookLink: 'a@href' }),
+        mk({ id: 'bad-src', name: '坏源', desc: '检测用', listUrl: 'http://mj.test/dead', bookList: 'li', bookTitle: 'a', bookLink: 'a@href' })
+      ]));
+    });
+    await p.route('http://mj.test/**', (route) => {
+      const u = route.request().url();
+      const cors = { 'access-control-allow-origin': '*' };
+      if (u.indexOf('/dead') >= 0) return route.fulfill({ status: 500, headers: cors, body: 'boom' });
+      return route.fulfill({
+        status: 200, headers: Object.assign({ 'content-type': 'text/html; charset=utf-8' }, cors),
+        body: '<ul><li><a href="http://mj.test/b1">书一</a></li><li><a href="http://mj.test/b2">书二</a></li></ul>'
+      });
+    });
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(1000);
+    ok('BD0 墨斋有检测书源入口', await p.evaluate(() => !!document.querySelector('[data-action="check-sources"]')));
+    await p.click('[data-action="check-sources"]');
+    await p.waitForTimeout(3000);
+    const r = await p.evaluate(() => {
+      const okEl = document.querySelector('[data-health-for="ok-src"]');
+      const badEl = document.querySelector('[data-health-for="bad-src"]');
+      return {
+        okText: okEl ? okEl.textContent : '', okHidden: okEl ? okEl.hidden : null,
+        badText: badEl ? badEl.textContent : '', badHidden: badEl ? badEl.hidden : null,
+        hint: (document.getElementById('srcCheckHint') || {}).textContent
+      };
+    });
+    ok('BD1 可用源显示连通与耗时', /^✓\s*通/.test(r.okText) && /ms$/.test(r.okText), JSON.stringify(r));
+    ok('BD2 失效源标出来并报错', /^✕/.test(r.badText) && r.badHidden === false, JSON.stringify(r));
+    ok('BD3 检测完成后给出汇总', /已测 2 个/.test(r.hint || ''), String(r.hint));
+    await p.close();
+  }
+
   ok('全程无控制台错误', errs.length === 0, errs.join(' | '));
   await browser.close();
   console.log('\n墨卷端到端回归：' + pass + ' PASS / ' + fail + ' FAIL');
