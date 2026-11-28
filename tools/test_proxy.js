@@ -9,7 +9,7 @@ const PY = process.env.MJ_PY || 'C:/Users/15810/.workbuddy/binaries/python/versi
 const CHROME = process.env.MJ_CHROME || 'C:/Users/15810/AppData/Local/ms-playwright/chromium-1252/chrome-win64/chrome.exe';
 function loadChromium() {
   for (const c of ['playwright',
-    'C:/Users/15810/.workbuddy/binaries/node/versions/22.22.2-6/node_modules/@playwright/cli/node_modules/playwright']) {
+    require('path').resolve(__dirname, '..', '.tmp/pw/node_modules/playwright')]) {
     try { return require(c).chromium; } catch (_) {}
   }
   throw new Error('找不到 playwright，请设置 NODE_PATH');

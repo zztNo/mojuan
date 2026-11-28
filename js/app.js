@@ -502,7 +502,7 @@
     shelf: [],
     progress: {},
     lastRead: '',
-    settings: { theme: 'day', fs: 19, lh: 2, paraGap: 1.1, indent: true, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', columns: 'auto', rate: 1, voiceURI: '' },
+    settings: { theme: 'day', fs: 19, lh: 2, paraGap: 1.1, indent: true, paper: 'xuan', lastDayPaper: 'xuan', font: 'song', chapterFont: '', underlineWidth: 1, cleanRules: [], s2t: false, pageMode: 'flip', flipAnim: 'realistic', columns: 'auto', rate: 1, voiceURI: '', voice2URI: '' },
     /* 只记真实开卷记录：hist 存最近 30 天的开卷日期，streak 为连续天数。
      * 旧版这里有 coins（墨币），没有消耗场景，已去掉。 */
     checkin: { last: '', days: 0, streak: 0, hist: [] },
@@ -1383,8 +1383,11 @@ MJ.sources.register({
           ${f('sfReplace', '正文清理正则（可选）', c.replaceRegex || '', '匹配到的内容会被删掉，如 广告|免责声明。', '')}
           <p class="mm-hint">本功能只提供一个通用抓取框架，不内置也不推荐任何站点。请仅用于公有领域、开放获取或你自己有权使用的资源；能否读取取决于目标站是否允许跨域访问。</p>
           <button class="link-more" data-action="source-switch-js">改用 JS 代码编辑</button>
+          <div id="sfDry" class="sf-dry" hidden></div>
         </div>
-        <div class="ce-foot"><div></div>
+        <div class="ce-foot">
+          <button class="btn btn-ghost btn-sm" data-action="source-dry-run">${icon('refresh', 'ic-sm')} 试跑一次</button>
+          <div style="flex:1"></div>
           <button class="btn btn-ghost" data-action="source-close">取消</button>
           <button class="btn btn-primary" data-action="source-form-save">保存并启用</button>
         </div>
@@ -1415,6 +1418,37 @@ MJ.sources.register({
     if (!/^[a-zA-Z0-9_-]+$/.test(cfg.id)) throw new Error('标识 ID 只能用英文、数字、下划线和短横线');
     if (cfg.replaceRegex) { try { new RegExp(cfg.replaceRegex); } catch (e) { throw new Error('清理正则写错了'); } }
     return { cfg, code: '/* mj-visual:' + cfg.id + ' */MJ.sources.register(MJ.sourceKit.makeSource(' + JSON.stringify(cfg) + '));' };
+  }
+  /* 试跑：用表单里的地址与选择器真抓一次，把「命中几本、前几本叫什么」摊开。
+     选择器写错最难受的是「保存成功、书肆里却空空如也」，这里一次就能看出断在哪一步。 */
+  async function dryRunSource() {
+    let cfg;
+    try { cfg = sourceCodeFromForm().cfg; } catch (e) { toast(e.message); return; }
+    const box = $('#sfDry');
+    const paint = (cls, html) => { if (box) { box.hidden = false; box.className = 'sf-dry ' + cls; box.innerHTML = html; } };
+    if (!cfg.listUrl) { toast('先填「书单页地址」再试跑'); return; }
+    if (/^file:/i.test(cfg.listUrl)) { paint('bad', '本地文件地址（file://）浏览器抓不到，换一个 http(s) 网址。'); return; }
+    paint('', '正在取回书单页…');
+    const t0 = (window.performance && performance.now()) || Date.now();
+    try {
+      const html = await MJ.sourceKit.fetchText(cfg.listUrl, null, 15000);
+      const list = await MJ.sourceKit.makeSource(cfg).metas();
+      const ms = Math.round(((window.performance && performance.now()) || Date.now()) - t0);
+      if (!list.length) {
+        paint('bad', '取回 ' + html.length + ' 字，但<b>一本都没匹配上</b>（' + ms + 'ms）。'
+          + '<br>· 先确认「书单条目选择器」在页面上真能选到东西，写宽一点试（如 a 或 li）'
+          + '<br>· 链接选择器一般写 a@href，留空取不到书链');
+        return;
+      }
+      const rows = list.slice(0, 5).map((b) =>
+        `<li>${esc(b.title)}<em>${esc(b.url || '')}</em></li>`).join('');
+      paint('ok', '取回 ' + html.length + ' 字 · 命中 <b>' + list.length + '</b> 本 · ' + ms + 'ms'
+        + '<ol class="sf-dry-list">' + rows + '</ol>'
+        + (list.length > 5 ? '<div class="sf-dry-more">只列前 5 本</div>' : ''));
+    } catch (e) {
+      paint('bad', '取不回来：' + esc(shortErr(e))
+        + '<br>常见原因：目标站不允许跨域（可在墨斋配本地代理）、地址写错、或页面需要登录。');
+    }
   }
   function renderCoverEditor() {
     const cd = ui.coverDraft; if (!cd) return;
@@ -4220,7 +4254,7 @@ MJ.sources.register({
     bookId: null, ch: 1, paras: [], text: '',
     sents: [], sentIndex: 0,
     charIndex: 0, paraIndex: 0,
-    rate: 1, voiceURI: '', timerMin: 0, timerAt: 0, scope: 'book', fadeOut: false,
+    rate: 1, voiceURI: '', voice2URI: '', slot: 'nar', timerMin: 0, timerAt: 0, scope: 'book', fadeOut: false,
     elapsed: 0, startedAt: 0, lastStart: 0, boundaryOK: false,
     remoteOff: false,
     dragging: false,
@@ -4282,7 +4316,10 @@ MJ.sources.register({
   function dedupeVoices(list) {
     const seen = new Set();
     return list.filter((v) => {
+      /* 旁白和对话选中的那两个永远留着，否则同类音色会被去重成只剩一个，
+         用户选完对话音色再打开面板，那个音色就「不见了」 */
       if (listen.voiceURI && v.voiceURI === listen.voiceURI) return true;
+      if (listen.voice2URI && v.voiceURI === listen.voice2URI) return true;
       const k = voiceKey(v);
       if (seen.has(k)) return false;
       seen.add(k);
@@ -4354,34 +4391,62 @@ MJ.sources.register({
     if (best) listen.voiceURI = best.voiceURI;
     return best || null;
   }
+  /* 分角色朗读：引号里的话换另一个音色念。
+     对话音色丢了（换设备 / 卸载语音包）就退回旁白音色，不至于突然没声。 */
+  function listenDialogueOn() { return !!listen.voice2URI; }
+  function listenVoiceFor(dia) {
+    if (!dia || !listen.voice2URI) return listenPickVoice();
+    const vs = listenVoices();
+    return vs.find((x) => x.voiceURI === listen.voice2URI) || listenPickVoice();
+  }
   function fmtTime(sec) {
     sec = Math.max(0, Math.round(sec));
     return String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
   }
   /* 切句：先按段落，再按句末标点；超过 90 字的再用逗号收短，
-     免得一句话合成十几秒，暂停和跳句都变迟钝。 */
+     免得一句话合成十几秒，暂停和跳句都变迟钝。
+     顺带标出「这句是不是引号里的话」——分角色朗读靠它换音色。 */
+  const SENT_RE_SRC = '[^。！？；!?;…]+[。！？；!?;…」』”’"]*';
+  const QUOTE_RE = /「[^」]*」|『[^』]*』|“[^”]*”|"[^"]*"|‘[^’]*’/g;
   function listenSplit(parts) {
     const sents = [];
     let offset = 0;
-    parts.forEach((p, pi) => {
-      const re = /[^。！？；!?;…]+[。！？；!?;…」』”’"]*/g;
+    /* 一段文字按句末标点断句，dia 标记整段断出来的句子是不是对白 */
+    const pushSeg = (text, base, pi, dia) => {
+      const re = new RegExp(SENT_RE_SRC, 'g');
       let m;
-      while ((m = re.exec(p)) !== null) {
+      while ((m = re.exec(text)) !== null) {
         const seg = m[0];
         if (!seg.trim()) continue;
-        const at = offset + m.index;
+        const at = base + m.index;
         if (seg.length > 90) {
           let cursor = 0;
           /* 不用后顾断言：旧 Safari / 老 WebView 解析整段脚本时会直接抛 SyntaxError */
           (seg.match(/[^，、：,:]*[，、：,:]|[^，、：,:]+/g) || []).forEach((piece) => {
             if (!piece) return;
-            sents.push({ t: piece, start: at + cursor, para: pi });
+            sents.push({ t: piece, start: at + cursor, para: pi, dia });
             cursor += piece.length;
           });
         } else {
-          sents.push({ t: seg, start: at, para: pi });
+          sents.push({ t: seg, start: at, para: pi, dia });
         }
       }
+    };
+    parts.forEach((p, pi) => {
+      /* 只认成对的引号；落单的引号当普通文字，免得后半段全被当成对白 */
+      const re = new RegExp(QUOTE_RE.source, 'g');
+      let last = 0, m;
+      while ((m = re.exec(p)) !== null) {
+        if (m.index > last) pushSeg(p.slice(last, m.index), offset + last, pi, false);
+        const raw = m[0];
+        const lead = raw.length - raw.replace(/^[「『“‘"]/, '').length;
+        const tail = raw.length - raw.replace(/[」』”’"]$/, '').length;
+        const inner = raw.slice(lead, raw.length - tail);
+        /* 引号本身不念出来，只念里面的字 */
+        if (inner.trim()) pushSeg(inner, offset + m.index + lead, pi, true);
+        last = m.index + raw.length;
+      }
+      if (last < p.length) pushSeg(p.slice(last), offset + last, pi, false);
       offset += p.length + 1;
     });
     return sents;
@@ -4818,7 +4883,7 @@ MJ.sources.register({
     listenEnsureResumed();
     const u = new SpeechSynthesisUtterance(s.t);
     u.lang = 'zh-CN'; u.rate = listen.rate;
-    const v = listenPickVoice(); if (v) u.voice = v;
+    const v = listenVoiceFor(!!s.dia); if (v) u.voice = v;
     u.onboundary = (ev) => {
       if (gen !== ttsGen) return;
       listen.boundaryOK = true;
@@ -5213,15 +5278,31 @@ MJ.sources.register({
           ? '<div class="lp-empty">没有检测到可用语音，可在系统设置里安装中文语音包</div>'
           : (allMeh ? '<div class="lp-empty">这台设备只装了早期机械音，念白话尚可、念文言会比较生硬。上面可以启用在线音色，或者装一个自然语音包。</div>' : ''));
       /* 每个音色右侧给一个试听键：标签只有「女声 · 自然」，实际嗓音还得听一耳朵才准 */
+      const slot = listen.slot === 'dia' && listen.voice2URI ? 'dia' : 'nar';
+      const curURI = slot === 'dia' ? listen.voice2URI : listen.voiceURI;
       const row = (v, no) => `<div class="lp-row">
-          <button class="lp-item ${listen.voiceURI === v.voiceURI ? 'active' : ''}" data-action="listen-voice" data-val="${esc(v.voiceURI)}" title="${esc(v.name)}">${voiceLabel(v)}<small>${voiceLangShort(v)} · ${no + 1}</small></button>
+          <button class="lp-item ${curURI === v.voiceURI ? 'active' : ''}" data-action="listen-voice" data-val="${esc(v.voiceURI)}" title="${esc(v.name)}">${voiceLabel(v)}<small>${voiceLangShort(v)} · ${no + 1}</small></button>
           <button class="lp-try" data-action="listen-voice-try" data-val="${esc(v.voiceURI)}" title="试听这个音色">${icon('volume', 'ic-sm')}</button>
         </div>`;
       const group = (title, list) => list.length
         ? `<div class="lp-group">${title}</div><div class="lp-list">${list.map(row).join('')}</div>`
         : '';
+      /* 分角色：引号里的话换一个音色念。只有设备里至少两个中文音色时才有意义，
+         否则点「对话」也挑不出不同的声音，白占一行。 */
+      const nameOf = (uri) => {
+        const hit = vs.concat(g.other).find((x) => x.voiceURI === uri);
+        return hit ? voiceLabel(hit) : '未选';
+      };
+      const dualReady = vs.length >= 2;
+      const slotBar = dualReady
+        ? `<div class="lp-group">分角色朗读</div><div class="rs-pills lp-slots">
+            <button class="rs-pill ${!listen.voice2URI ? 'active' : ''}" data-action="listen-slot" data-val="off">关闭<small>一个音色念全篇</small></button>
+            <button class="rs-pill ${listen.voice2URI && slot === 'nar' ? 'active' : ''}" data-action="listen-slot" data-val="nar">旁白<small>${esc(nameOf(listen.voiceURI))}</small></button>
+            <button class="rs-pill ${listen.voice2URI && slot === 'dia' ? 'active' : ''}" data-action="listen-slot" data-val="dia">对话<small>${listen.voice2URI ? esc(nameOf(listen.voice2URI)) : '引号里的话'}</small></button>
+          </div>`
+        : '';
       /* 提示放列表上方：面板高度有限，放下面要滚动才看得见 */
-      p.innerHTML = head('音色 · ' + (g.zh.length + g.other.length) + ' 个') + onlineBtn + tip
+      p.innerHTML = head('音色 · ' + (g.zh.length + g.other.length) + ' 个') + onlineBtn + slotBar + tip
         + group('中文音色', g.zh)
         + group(g.zh.length ? '其它语言' : '音色', g.other)
         + (g.other.length && g.zh.length ? '<div class="lp-empty">文言文建议用中文音色；其它语言念中文会走音。</div>' : '');
@@ -5425,6 +5506,7 @@ MJ.sources.register({
     listen.rate = clampRate(state.settings.rate);
     listen.scope = state.listenScope === 'chapter' ? 'chapter' : 'book';
     listen.voiceURI = state.settings.voiceURI || '';
+    listen.voice2URI = state.settings.voice2URI || '';
     /* 每次重新打开听卷都再试一次在线音色，别因为上次失败就永远不用 */
     listen.remoteOff = false;
     remoteWarned = false;
@@ -6696,6 +6778,7 @@ MJ.sources.register({
         toast('书源已接入：' + built.cfg.name);
         break;
       }
+      case 'source-dry-run': dryRunSource(); break;
       case 'source-close': closeSourceEditor(); break;
       case 'source-save': {
         const ta = $('#sourceCode');
@@ -7281,8 +7364,36 @@ MJ.sources.register({
         break;
       }
       case 'listen-voice': {
-        listen.voiceURI = val;
-        state.settings.voiceURI = val; save();
+        if (listen.voice2URI && listen.slot === 'dia') {
+          if (val === listen.voiceURI) { toast('旁白和对话用同一个音色，等于没分开'); break; }
+          listen.voice2URI = val; state.settings.voice2URI = val; save();
+        } else {
+          listen.voiceURI = val; state.settings.voiceURI = val;
+          /* 旁白改成了对话那个音色，分角色就没有意义了，顺手关掉 */
+          if (listen.voice2URI === val) { listen.voice2URI = ''; state.settings.voice2URI = ''; listen.slot = 'nar'; }
+          save();
+        }
+        listenPanel('voice');
+        if (listen.playing) listenSpeak(true);
+        break;
+      }
+      /* 分角色朗读：打开时自动挑一个跟旁白不同的音色，选完还能在列表里改 */
+      case 'listen-slot': {
+        if (val === 'off') {
+          listen.voice2URI = ''; state.settings.voice2URI = ''; listen.slot = 'nar'; save();
+        } else {
+          listen.slot = val === 'dia' ? 'dia' : 'nar';
+          if (!listen.voice2URI) {
+            const vs = listenVoices();
+            const other = vs.find((x) => x.voiceURI !== listen.voiceURI) || vs[1];
+            if (!other) { toast('这台设备只有一个中文音色，分不开角色'); break; }
+            if (!listen.voiceURI) listen.voiceURI = (vs.find((x) => x.voiceURI !== other.voiceURI) || vs[0]).voiceURI;
+            listen.voice2URI = other.voiceURI;
+            state.settings.voiceURI = listen.voiceURI;
+            state.settings.voice2URI = listen.voice2URI;
+            save();
+          }
+        }
         listenPanel('voice');
         if (listen.playing) listenSpeak(true);
         break;

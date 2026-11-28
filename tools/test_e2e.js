@@ -8,7 +8,7 @@ const OFFLINE = 'file:///' + path.join(ROOT, 'mojuan-offline.html').replace(/\\/
 const CHROME = process.env.MJ_CHROME || 'C:/Users/15810/AppData/Local/ms-playwright/chromium-1252/chrome-win64/chrome.exe';
 function loadChromium() {
   const candidates = ['playwright',
-    'C:/Users/15810/.workbuddy/binaries/node/versions/22.22.2-6/node_modules/@playwright/cli/node_modules/playwright'];
+    require('path').resolve(__dirname, '..', '.tmp/pw/node_modules/playwright')];
   for (const c of candidates) { try { return require(c).chromium; } catch (_) {} }
   throw new Error('找不到 playwright，请设置 NODE_PATH');
 }
@@ -2994,6 +2994,127 @@ const TTS_MOCK = () => {
     ok('BD1 可用源显示连通与耗时', /^✓\s*通/.test(r.okText) && /ms$/.test(r.okText), JSON.stringify(r));
     ok('BD2 失效源标出来并报错', /^✕/.test(r.badText) && r.badHidden === false, JSON.stringify(r));
     ok('BD3 检测完成后给出汇总', /已测 2 个/.test(r.hint || ''), String(r.hint));
+    await p.close();
+  }
+
+  /* ===== BE：听卷分角色朗读 ===== */
+  {
+    /* 两个中文音色 + 假 utterance：真 SpeechSynthesisUtterance 的 voice 只认
+       SpeechSynthesisVoice 实例，塞普通对象会抛 TypeError，所以连构造器一起换掉 */
+    const TTS_DUAL = () => {
+      const V = [
+        { voiceURI: 'v-nar', name: 'Microsoft Xiaoxiao', lang: 'zh-CN', localService: true, default: true },
+        { voiceURI: 'v-dia', name: 'Microsoft Yunxi', lang: 'zh-CN', localService: true, default: false }
+      ];
+      class FakeU { constructor(t) { this.text = t; this.voice = null; } }
+      window.SpeechSynthesisUtterance = FakeU;
+      window.__spoke = []; window.__voices = [];
+      const S = {
+        paused: false, speaking: false,
+        getVoices: () => V, addEventListener() {}, removeEventListener() {},
+        resume() {}, pause() {}, cancel() {},
+        speak(u) {
+          window.__spoke.push(u.text);
+          window.__voices.push(u.voice ? u.voice.voiceURI : '');
+          /* 先补一个 boundary：没有它，第一句结束会被当成「这台设备没有中文语音」而停住 */
+          setTimeout(() => {
+            try {
+              if (u.onboundary) u.onboundary({ charIndex: 0 });
+              if (u.onend) u.onend();
+            } catch (e) { /* 忽略 */ }
+          }, 20);
+        }
+      };
+      Object.defineProperty(window, 'speechSynthesis', { configurable: true, get: () => S });
+    };
+    const p = await newPage(browser, { shelf: [], settings: { pageMode: 'scroll', voiceURI: 'v-nar', voice2URI: 'v-dia' } }, errs);
+    await p.addInitScript(TTS_DUAL);
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(400);
+    const pack = {
+      app: 'mojuan-volume', version: 1,
+      book: { title: '对白测试卷', author: '测试', kind: 'text' },
+      chapters: [{ title: '第一章 雨中', paras: ['天还没亮，窗纸已经湿了。', '他抬头看了看天，说道：「今日有雨，别出门了。」', '「那我就在家读书。」她笑着说。'] }]
+    };
+    await p.locator('#fileInput').setInputFiles([{
+      name: '对白.mjz', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(pack), 'utf8')
+    }]);
+    await p.waitForTimeout(1600);
+    const bid = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      const b = (s.localBooks || []).find((x) => x.title === '对白测试卷');
+      return b ? b.id : null;
+    });
+    ok('BE0 长出带对白的测试卷', !!bid, String(bid));
+    await p.goto(FILE + '#/reader/' + bid + '/1');
+    await p.waitForTimeout(900);
+    await p.click('[data-action="toggle-tts"]');
+    await p.waitForTimeout(1600);
+    const sp = await p.evaluate(() => ({ texts: window.__spoke.slice(0, 8), voices: window.__voices.slice(0, 8) }));
+    const diaAt = sp.texts.findIndex((t) => t.indexOf('今日有雨') >= 0);
+    const narAt = sp.texts.findIndex((t) => t.indexOf('天还没亮') >= 0);
+    ok('BE1 对白句用对话音色', diaAt >= 0 && sp.voices[diaAt] === 'v-dia', JSON.stringify(sp));
+    ok('BE2 旁白句仍用旁白音色', narAt >= 0 && sp.voices[narAt] === 'v-nar', JSON.stringify(sp));
+    ok('BE3 朗读时不念引号本身', sp.texts.every((t) => !/[「」『』]/.test(t)), JSON.stringify(sp.texts));
+    /* 面板：关闭分角色后存档里的 voice2URI 要清掉，否则下次打开又「分」上了 */
+    await p.click('[data-action="listen-panel"][data-val="voice"]');
+    await p.waitForTimeout(250);
+    const hasSlots = await p.evaluate(() => !!document.querySelector('.lp-slots [data-action="listen-slot"][data-val="off"]'));
+    ok('BE4 音色面板有分角色三档', hasSlots);
+    await p.click('.lp-slots [data-action="listen-slot"][data-val="off"]');
+    await p.waitForTimeout(250);
+    const off = await p.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('mojuan.state.v1') || '{}');
+      return { v2: (s.settings || {}).voice2URI, v1: (s.settings || {}).voiceURI,
+        active: !!document.querySelector('.lp-slots .rs-pill.active[data-val="off"]') };
+    });
+    ok('BE5 关闭分角色后存档清空且高亮正确', off.v2 === '' && off.active === true, JSON.stringify(off));
+    await p.close();
+  }
+
+  /* ===== BF：书源规则试跑 ===== */
+  {
+    const p = await browser.newPage({ viewport: { width: 430, height: 900 } });
+    p.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
+    await p.route('http://mj.test/**', (route) => route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8', 'access-control-allow-origin': '*' },
+      body: '<ul><li class="bk"><a href="/b1">甲卷</a></li><li class="bk"><a href="/b2">乙卷</a></li></ul>'
+    }));
+    await p.goto(FILE + '#/me');
+    await p.waitForTimeout(600);
+    await p.click('[data-action="add-source"]');
+    await p.waitForTimeout(300);
+    const fill = async (id, val) => {
+      const el = p.locator('#' + id);
+      await el.fill(val);
+    };
+    await fill('sfId', 'dry-src');
+    await fill('sfName', '试跑源');
+    await fill('sfListUrl', 'http://mj.test/list');
+    await fill('sfBookList', 'li.bk');
+    await fill('sfBookTitle', 'a');
+    await fill('sfBookLink', 'a@href');
+    await p.click('[data-action="source-dry-run"]');
+    await p.waitForTimeout(1200);
+    const g = await p.evaluate(() => {
+      const d = document.getElementById('sfDry');
+      return d ? { cls: d.className, text: d.textContent, hidden: d.hidden } : null;
+    });
+    ok('BF1 试跑命中书目并列出前几本',
+      !!g && !g.hidden && /\bok\b/.test(g.cls) && g.text.indexOf('甲卷') >= 0 && g.text.indexOf('命中') >= 0,
+      JSON.stringify(g));
+    /* 故意写错选择器：应当明确说「一本都没匹配上」，而不是静默成功 */
+    await fill('sfBookList', '.nothing-here');
+    await p.click('[data-action="source-dry-run"]');
+    await p.waitForTimeout(1000);
+    const bad = await p.evaluate(() => {
+      const d = document.getElementById('sfDry');
+      return d ? { cls: d.className, text: d.textContent } : null;
+    });
+    ok('BF2 选择器没命中时给出明确原因',
+      !!bad && /\bbad\b/.test(bad.cls) && bad.text.indexOf('一本都没匹配上') >= 0,
+      JSON.stringify(bad));
     await p.close();
   }
 

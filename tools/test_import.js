@@ -7,7 +7,13 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const FILE = 'file:///' + path.join(ROOT, 'index.html').replace(/\\/g, '/');
 const CHROME = 'C:/Users/15810/AppData/Local/ms-playwright/chromium-1252/chrome-win64/chrome.exe';
-const chromium = require('C:/Users/15810/.workbuddy/binaries/node/versions/22.22.2-6/node_modules/@playwright/cli/node_modules/playwright').chromium;
+function loadChromium() {
+  for (const c of ['playwright', path.join(ROOT, '.tmp/pw/node_modules/playwright')]) {
+    try { return require(c).chromium; } catch (_) { /* 换下一个 */ }
+  }
+  throw new Error('找不到 playwright，请设置 NODE_PATH 或 npm i playwright 到 .tmp/pw');
+}
+const chromium = loadChromium();
 
 /* 同一段话的六种字节形态（GBK / Big5 / UTF-16LE / UTF-16BE / UTF-8+BOM / 纯 ASCII） */
 const CASES = [

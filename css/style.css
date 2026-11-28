@@ -759,6 +759,20 @@ img, svg { display: block; }
 .source-form .mm-body { overflow-y: auto; min-height: 0; gap: 12px; }
 .source-form .mm-body .mm-hint { margin: -6px 0 2px; }
 .source-form .link-more { align-self: flex-start; }
+/* 书源试跑结果：一片小字，成功绿框、失败朱砂框 */
+.sf-dry {
+  margin-top: 4px; padding: 9px 11px; border-radius: 8px; font-size: 12px; line-height: 1.75;
+  background: color-mix(in srgb, var(--ink-3) 8%, transparent); color: var(--ink-2); word-break: break-word;
+}
+.sf-dry.ok { background: color-mix(in srgb, #2f7d4f 10%, transparent); color: var(--ink-1); }
+.sf-dry.bad { background: color-mix(in srgb, var(--cinnabar) 10%, transparent); color: var(--ink-1); }
+.sf-dry-list { margin: 6px 0 0; padding-left: 18px; }
+.sf-dry-list li { margin-bottom: 3px; }
+.sf-dry-list em {
+  display: block; font-style: normal; font-size: 10.5px; color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sf-dry-more { margin-top: 4px; font-size: 11px; color: var(--ink-3); }
 /* 订阅列表：读过的条目淡化，和「未读」区分开 */
 .sub-item.read .st { opacity: .52; }
 /* 本地代理地址输入 */
@@ -1503,6 +1517,14 @@ body[data-theme="night"] .rank-tab.active { background: #333c3e; color: #e8a08d;
 .listen-panel .rs-pills.lp-where-scope { grid-template-columns: repeat(2, 1fr); }
 .lp-where-scope .rs-pill small { display: block; margin-top: 2px; font-size: 10px; line-height: 1.4; color: var(--lsub); }
 .lp-where-scope .rs-pill.active small { color: var(--lmark); }
+/* 分角色朗读：三个并排的选择（关闭 / 旁白 / 对话），每个下面挂当前音色 */
+.listen-panel .rs-pills.lp-slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.lp-slots .rs-pill { padding: 7px 6px; text-align: center; }
+.lp-slots .rs-pill small {
+  display: block; margin-top: 2px; font-size: 10px; line-height: 1.4;
+  color: var(--lsub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lp-slots .rs-pill.active small { color: var(--lmark); }
 .listen-panel .rs-pill {
   border-color: color-mix(in srgb, var(--link) 18%, transparent);
   color: var(--link); text-align: center;
